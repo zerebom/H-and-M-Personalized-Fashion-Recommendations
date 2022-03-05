@@ -28,7 +28,7 @@ output_dir = root_dir / "output"
 
 
 # %%
-#データセットの読み込み
+# データセットの読み込み
 trans_df = cudf.read_csv(input_dir /
                          "transactions_train.csv"
                          ).to_pandas()
@@ -40,7 +40,7 @@ art_df['article_id'] = art_df['article_id'].astype('str')
 
 # %%
 
-#transactionsの前処理
+# transactionsの前処理
 trans_df['customer_id'] = customer_hex_id_to_int(trans_df['customer_id'])
 trans_df['article_id'] = article_id_str_to_int(trans_df['article_id'])
 trans_df['t_dat'] = pd.to_datetime(trans_df['t_dat'], format='%Y-%m-%d')
@@ -49,7 +49,7 @@ trans_df['week'] = 104 - (trans_df['t_dat'].max() -
 
 # %%
 
-#customersの前処理
+# customersの前処理
 cust_df['customer_id'] = customer_hex_id_to_int(cust_df['customer_id'])
 
 for col in ['FN', 'Active', 'age']:
@@ -64,7 +64,7 @@ cust_df["fashion_news_frequency"] = Categorize().fit_transform(
 
 # %%
 
-#articlesの前処理
+# articlesの前処理
 art_df['article_id'] = article_id_str_to_int(art_df['article_id'])
 
 for col in art_df.columns:
@@ -73,14 +73,14 @@ for col in art_df.columns:
 
 
 # %%
-#データセットのメモリ削減
+# データセットのメモリ削減
 trans_df = reduce_mem_usage(trans_df)
 cust_df = reduce_mem_usage(cust_df)
 art_df = reduce_mem_usage(art_df)
 
 
 # %%
-#保存
+# 保存
 trans_df.to_parquet(input_dir / 'transactions_train.parquet')
 cust_df.to_parquet(input_dir / 'customers.parquet')
 art_df.to_parquet(input_dir / 'articles.parquet')
@@ -88,7 +88,7 @@ art_df.to_parquet(input_dir / 'articles.parquet')
 
 # %%
 
-#保存(0.05sample)
+# 保存(0.05sample)
 sample = 0.05
 cust_df_sample = cust_df.sample(frac=sample, replace=False)
 cust_df_sample_ids = set(cust_df_sample['customer_id'])
@@ -111,7 +111,7 @@ art_df_sample.to_parquet(
 
 # %%
 
-#validateの用意
+# validateの用意
 val_week_purchases_by_cust = defaultdict(list)
 val_week_purchases_by_cust.update(
     trans_df[trans_df.week == trans_df.week.max()]
@@ -125,7 +125,7 @@ pd.to_pickle(dict(val_week_purchases_by_cust),
 
 # %%
 
-#sample subの用意
+# sample subの用意
 sample_sub = pd.read_csv(input_dir / 'sample_submission.csv')
 valid_gt = customer_hex_id_to_int(sample_sub.customer_id) \
     .map(val_week_purchases_by_cust) \
