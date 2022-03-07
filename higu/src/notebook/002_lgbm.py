@@ -30,10 +30,10 @@ if True:
     from eda_tools import visualize_importance
 
 
-root_dir = Path("/home/kokoro/h_and_m")
+root_dir = Path("/home/kokoro/h_and_m/higu")
 input_dir = root_dir / "input"
 output_dir = root_dir / "output"
-DRY_RUN = False
+DRY_RUN = True
 
 # %%
 
@@ -56,7 +56,7 @@ trans_cdf = to_cdf(transactions)
 art_cdf = to_cdf(articles)
 cust_cdf = to_cdf(customers)
 
-
+#%%
 # ================================= time =================================
 
 
