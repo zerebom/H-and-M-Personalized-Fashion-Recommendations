@@ -18,6 +18,12 @@ from tqdm import tqdm
 
 if True:
     sys.path.append("../")
+    from candidacies import (AbstractCGBlock, BoughtItemsAtInferencePhase,
+                             LastNWeekArticles, PopularItemsoftheLastWeeks,
+                             candidates_dict2df)
+    from features import (AbstractBaseBlock, ModeCategoryBlock,
+                          TargetEncodingBlock)
+    from metrics import apk, mapk
     from utils import (Categorize, article_id_int_to_str,
                        article_id_str_to_int, customer_hex_id_to_int,
                        reduce_mem_usage)
@@ -89,107 +95,6 @@ def make_y_cdf(
 
 def clip_transactions(transactions: cudf.DataFrame, end_date: datetime):
     return transactions.query(f't_dat<@end_date')
-
-#%%
-# ================================= candidate_generation =================
-
-
-def candidates_dict2df(candidates_dict):
-    tuples = []
-    for cust, articles in tqdm(candidates_dict.items()):
-        for art in articles:
-            tuples.append((cust, art))
-
-    df = pd.DataFrame(tuples)
-    df.columns = ['customer_id', 'article_id']
-    cdf = to_cdf(df)
-    cdf = cdf.drop_duplicates().reset_index(drop=True)
-    return cdf
-
-
-# ================================= feature_Generation ===================
-
-
-
-# ================================= metrics ===================
-
-
-def mapk(actual: list, predicted: list, k=10) -> float:
-    '''
-    usage:
-    mapk(merged['valid_true'].map(lambda x: x.split()), merged['valid_pred'].map(lambda x: x.split()), k=12)
-
-    '''
-    return np.mean([apk(a, p, k) for a, p in zip(actual, predicted)])
-
-
-def apk(actual: list, predicted: list, k=10) -> float:
-    if len(predicted) > k:
-        predicted = predicted[:k]
-
-    score = 0.0
-    num_hits = 0.0
-
-    for i, p in enumerate(predicted):
-        if p in actual and p not in predicted[:i]:
-            num_hits += 1.0
-            score += num_hits / (i + 1.0)
-
-    if not actual:
-        return 0.0
-
-    return score / min(len(actual), k)
-
-# ================================= utils ===================
-
-def reduce_mem_usage(_df):
-    """ iterate through all the columns of a dataframe and modify the data type
-        to reduce memory usage.
-    """
-    df = _df.copy()
-    start_mem = df.memory_usage().sum() / 1024**2
-    print('Memory usage of dataframe is {:.2f} MB'.format(start_mem))
-
-    for col in df.columns:
-        col_type = df[col].dtype
-
-        if col_type == 'datetime64[ns]':
-          continue
-
-        if str(col_type) in ['object', 'category']:
-          df[col] = df[col].astype('category')
-          continue
-
-        c_min = df[col].min()
-        c_max = df[col].max()
-        if str(col_type)[:3] in ['int', 'uin']:
-            if c_min > np.iinfo(
-                    np.int8).min and c_max < np.iinfo(
-                    np.int8).max:
-                df[col] = df[col].astype(np.int8)
-            elif c_min > np.iinfo(np.int16).min and c_max < np.iinfo(np.int16).max:
-                df[col] = df[col].astype(np.int16)
-            elif c_min > np.iinfo(np.int32).min and c_max < np.iinfo(np.int32).max:
-                df[col] = df[col].astype(np.int32)
-            elif c_min > np.iinfo(np.int64).min and c_max < np.iinfo(np.int64).max:
-                df[col] = df[col].astype(np.int64)
-        else:
-            # if c_min > np.finfo(np.float16).min and c_max < np.finfo(np.float16).max:
-            #     df[col] = df[col].astype(np.float16)
-            if c_min > np.finfo(
-                    np.float32).min and c_max < np.finfo(
-                    np.float32).max:
-                df[col] = df[col].astype(np.float32)
-            else:
-                df[col] = df[col].astype(np.float64)
-
-    end_mem = df.memory_usage().sum() / 1024**2
-    print('Memory usage after optimization is: {:.2f} MB'.format(end_mem))
-    print('Decreased by {:.1f}%'.format(
-        100 * (start_mem - end_mem) / start_mem))
-
-    return df
-
 
 # %%
 

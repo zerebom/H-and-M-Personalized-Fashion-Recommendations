@@ -22,7 +22,6 @@ def reduce_mem_usage(_df):
           df[col] = df[col].astype('category')
           continue
 
-        print(str(col_type))
         c_min = df[col].min()
         c_max = df[col].max()
         if str(col_type)[:3] in ['int', 'uin']:

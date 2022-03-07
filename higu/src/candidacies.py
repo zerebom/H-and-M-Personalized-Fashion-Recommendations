@@ -1,7 +1,20 @@
 import pandas as pd
 import cudf
+from tqdm import tqdm
 
 to_cdf = cudf.DataFrame.from_pandas
+
+def candidates_dict2df(candidates_dict):
+    tuples = []
+    for cust, articles in tqdm(candidates_dict.items()):
+        for art in articles:
+            tuples.append((cust, art))
+
+    df = pd.DataFrame(tuples)
+    df.columns = ['customer_id', 'article_id']
+    cdf = to_cdf(df)
+    cdf = cdf.drop_duplicates().reset_index(drop=True)
+    return cdf
 
 class AbstractCGBlock:
     def fit(self, input_df: pd.DataFrame, y=None):
