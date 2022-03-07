@@ -4,9 +4,9 @@ import os
 import pprint
 import sys
 from collections import defaultdict
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from time import time
-from datetime import date, datetime, timedelta
 
 import cudf
 import lightgbm as lgb
@@ -21,13 +21,13 @@ if True:
     from candidacies import (AbstractCGBlock, BoughtItemsAtInferencePhase,
                              LastNWeekArticles, PopularItemsoftheLastWeeks,
                              candidates_dict2df)
+    from eda_tools import visualize_importance
     from features import (AbstractBaseBlock, ModeCategoryBlock,
                           TargetEncodingBlock)
     from metrics import apk, mapk
-    from utils import (Categorize, article_id_int_to_str,arts_id_list2str,
-                       article_id_str_to_int, customer_hex_id_to_int,phase_date,
-                       reduce_mem_usage)
-    from eda_tools import visualize_importance
+    from utils import (Categorize, article_id_int_to_str,
+                       article_id_str_to_int, arts_id_list2str,
+                       customer_hex_id_to_int, phase_date, reduce_mem_usage)
 
 
 root_dir = Path("/home/kokoro/h_and_m/higu")
@@ -56,7 +56,7 @@ trans_cdf = to_cdf(transactions)
 art_cdf = to_cdf(articles)
 cust_cdf = to_cdf(customers)
 
-#%%
+# %%
 # ================================= time =================================
 
 
@@ -89,15 +89,66 @@ def make_y_cdf(
 def clip_transactions(transactions: cudf.DataFrame, end_date: datetime):
     return transactions.query(f't_dat<@end_date')
 
+# ------------------------------blocks&params----------------------------------
+
+candidate_blocks = [
+    # *[PopularItemsoftheLastWeeks(customer_ids)],
+    # TODO: 全customer_idを含んでるCGが最初じゃないとだめ
+    *[LastNWeekArticles(n_weeks=2)]
+]
+
+agg_list = ['mean', 'max', 'min', 'std', 'median']
+feature_blocks = [*[TargetEncodingBlock('article_id',
+                                        'age',
+                                        agg_list)],
+                  *[TargetEncodingBlock('article_id',
+                                        col,
+                                        ['mean']) for col in ["FN",
+                                                              "Active",
+                                                              'club_member_status',
+                                                              'fashion_news_frequency']],
+                  *[TargetEncodingBlock('customer_id',
+                                        col,
+                                        agg_list) for col in ['price',
+                                                              'sales_channel_id']],
+                  *[ModeCategoryBlock('customer_id',
+                                      col) for col in ['product_type_no',
+                                                       'graphical_appearance_no',
+                                                       'colour_group_code',
+                                                       'perceived_colour_value_id',
+                                                       'perceived_colour_master_id',
+                                                       'department_no',
+                                                       'index_code',
+                                                       'index_group_no',
+                                                       'section_no',
+                                                       'garment_group_no']],
+                  ]
+
+
+param = {
+    "objective": "binary",
+    "metric": 'auc',
+    "verbosity": -1,
+    "boosting": "gbdt",
+    "is_unbalance": True,
+    "seed": 42,
+    "learning_rate": 0.1,
+    'colsample_bytree': .5,
+    'subsample_freq': 3,
+    'subsample': .9,
+    "n_estimators": 1000,
+    'importance_type': 'gain',
+    'reg_lambda': 1.5,
+    'reg_alpha': .1,
+    'max_depth': 6,
+    'num_leaves': 45
+}
+
 # %%
 
-def candidate_generation(trans_cdf, art_cdf, cust_cdf,y_cdf=None):
+
+def candidate_generation(blocks, trans_cdf, art_cdf, cust_cdf, y_cdf=None):
     customer_ids = list(cust_cdf['customer_id'].to_pandas().unique())
-    blocks = [
-        # *[PopularItemsoftheLastWeeks(customer_ids)],
-        # TODO: 全customer_idを含んでるCGが最初じゃないとだめ
-        *[LastNWeekArticles(n_weeks=2)]
-    ]
 
     if y_cdf is not None:
         blocks.append(BoughtItemsAtInferencePhase(y_cdf))
@@ -115,7 +166,7 @@ def candidate_generation(trans_cdf, art_cdf, cust_cdf,y_cdf=None):
     return candidates_cdf
 
 
-def feature_generation(trans_cdf, art_cdf, cust_cdf):
+def feature_generation(blocks, trans_cdf, art_cdf, cust_cdf):
     recent_bought_cdf = cudf.DataFrame.from_pandas(
         trans_cdf.sort_values(['customer_id', 't_dat'], ascending=False)
         .to_pandas()
@@ -131,32 +182,6 @@ def feature_generation(trans_cdf, art_cdf, cust_cdf):
     feature_df.drop(columns=drop_cols, inplace=True)
     art_feat_cdf = art_cdf[['article_id']]
     cust_feat_cdf = cust_cdf[['customer_id']]
-
-    item_category_cols = [
-        'product_type_no',
-        'graphical_appearance_no',
-        'colour_group_code',
-        'perceived_colour_value_id',
-        'perceived_colour_master_id',
-        'department_no',
-        'index_code',
-        'index_group_no',
-        'section_no',
-        'garment_group_no']
-
-    binary_cols = [
-        "FN",
-        "Active",
-        'club_member_status',
-        'fashion_news_frequency']
-    agg_list = ['mean', 'max', 'min', 'std', 'median']
-
-    blocks = [
-        *[TargetEncodingBlock('article_id', 'age', agg_list)],
-        *[TargetEncodingBlock('article_id', col, ['mean']) for col in binary_cols],
-        *[TargetEncodingBlock('customer_id', col, agg_list) for col in ['price', 'sales_channel_id']],
-        *[ModeCategoryBlock('customer_id', col) for col in item_category_cols],
-    ]
 
     for block in tqdm(blocks):
         if block.key_col == 'article_id':
@@ -177,8 +202,13 @@ def feature_generation(trans_cdf, art_cdf, cust_cdf):
     return _art_cdf, _cust_cdf
 
 
-
-def make_trainable_data(raw_trans_cdf, art_cdf, cust_cdf, phase):
+def make_trainable_data(
+        candidate_blocks,
+        feature_blocks,
+        raw_trans_cdf,
+        art_cdf,
+        cust_cdf,
+        phase):
     X_end_date = datetime_dic['X'][phase]['end_date']
 
     y_cdf = None
@@ -190,17 +220,19 @@ def make_trainable_data(raw_trans_cdf, art_cdf, cust_cdf, phase):
     trans_cdf = clip_transactions(raw_trans_cdf, X_end_date)
 
     print("start candidate generation")
-    candidates_cdf = candidate_generation(trans_cdf, art_cdf, cust_cdf,y_cdf)
+    candidates_cdf = candidate_generation(
+        candidate_blocks, trans_cdf, art_cdf, cust_cdf, y_cdf)
 
     print("start feature generation")
     art_feat_cdf, cust_feat_cdf = feature_generation(
-        trans_cdf, art_cdf, cust_cdf)
+        feature_blocks, trans_cdf, art_cdf, cust_cdf)
 
     X = candidates_cdf\
         .merge(cust_feat_cdf, how='left', on='customer_id')\
         .merge(art_feat_cdf, how='left', on='article_id')
 
-    recent_items = trans_cdf.groupby('article_id')['week'].max().reset_index().query('week>96')['article_id'].values
+    recent_items = trans_cdf.groupby('article_id')['week'].max(
+    ).reset_index().query('week>96')['article_id'].values
     X = X[X["article_id"].isin(recent_items)]
 
     key_cols = ['customer_id', 'article_id']
@@ -208,42 +240,30 @@ def make_trainable_data(raw_trans_cdf, art_cdf, cust_cdf, phase):
 
     if phase is 'test':
         X = X.drop(columns=key_cols)
-        return reduce_mem_usage(key_df.to_pandas()), reduce_mem_usage(X.to_pandas()), None
+        return reduce_mem_usage(
+            key_df.to_pandas()), reduce_mem_usage(
+            X.to_pandas()), None
 
-    y = X.merge(y_cdf, how='left', on=key_cols)['purchased'].fillna(0).astype(int)
-    print("X_shape:",X.shape, "y_mean:",y.mean())
+    y = X.merge(y_cdf, how='left', on=key_cols)[
+        'purchased'].fillna(0).astype(int)
+    print("X_shape:", X.shape, "y_mean:", y.mean())
     X = X.drop(columns=key_cols)
-    return reduce_mem_usage(key_df.to_pandas()), reduce_mem_usage(X.to_pandas()), y.to_pandas()
+    return reduce_mem_usage(
+        key_df.to_pandas()), reduce_mem_usage(
+        X.to_pandas()), y.to_pandas()
 
 
-
-#%%
-train_key, train_X, train_y = make_trainable_data(trans_cdf, art_cdf, cust_cdf, phase='train')
-valid_key, valid_X, valid_y = make_trainable_data( trans_cdf, art_cdf, cust_cdf, phase='valid')
-test_key, test_X, _ = make_trainable_data( trans_cdf, art_cdf, cust_cdf, phase='test')
-
+# %%
+train_key, train_X, train_y = make_trainable_data(
+    candidate_blocks, feature_blocks, trans_cdf, art_cdf, cust_cdf, phase='train')
+valid_key, valid_X, valid_y = make_trainable_data(
+    candidate_blocks, feature_blocks, trans_cdf, art_cdf, cust_cdf, phase='valid')
+test_key, test_X, _ = make_trainable_data(
+    candidate_blocks, feature_blocks, trans_cdf, art_cdf, cust_cdf, phase='test')
 
 
 # %%
 
-param = {
-    "objective": "binary",
-    "metric": 'auc',
-    "verbosity": -1,
-    "boosting": "gbdt",
-    "is_unbalance":True,
-    "seed": 42,
-    "learning_rate": 0.1,
-    'colsample_bytree': .5,
-    'subsample_freq': 3,
-    'subsample': .9,
-    "n_estimators": 1000,
-    'importance_type': 'gain',
-    'reg_lambda': 1.5,
-    'reg_alpha': .1,
-    'max_depth': 6,
-    'num_leaves':45
-}
 
 cat_features = train_X.select_dtypes('category').columns.tolist()
 es = lgb.early_stopping(500, verbose=1)
@@ -263,9 +283,7 @@ valid_key['target'] = valid_y
 valid_key['pred'].plot.hist()
 
 
-
-
-#%%
+# %%
 valid_map_df = valid_key\
     .sort_values(by=['customer_id', 'pred'], ascending=False)\
     .groupby('customer_id')['article_id']\
@@ -285,35 +303,36 @@ mapk(
             lambda x: x.split()), k=12)
 
 
-
 # %%
-
 
 
 pop = PopularItemsoftheLastWeeks([1])
 pop.fit(trans_cdf)
 pop_items = list(pop.popular_items)
 
+
 def fill_pop_items(pred_ids, pop_items):
     pred_ids.extend(pop_items)
     return pred_ids[:12]
 
+
 test_y = clf.predict_proba(test_X)[:, 1]
 test_key['pred'] = test_y
 test_key = test_key.sort_values(by=['customer_id', 'pred'], ascending=False)
-my_sub_df = test_key.groupby('customer_id')['article_id'].apply(list).apply(lambda x: fill_pop_items(x,pop_items))
+my_sub_df = test_key.groupby('customer_id')['article_id'].apply(
+    list).apply(lambda x: fill_pop_items(x, pop_items))
 my_sub_df = my_sub_df.apply(arts_id_list2str).reset_index()
 my_sub_df.columns = ['customer_id', 'prediction']
 my_sub_df
 
 
+# %%
 
-#%%
+sample_sub_df = pd.read_csv(input_dir / 'sample_submission.csv')
+hex_id2idx_dic = {v: k for k, v in customer_hex_id_to_int(
+    sample_sub_df['customer_id']).to_dict().items()}
 
-sample_sub_df = pd.read_csv(input_dir/'sample_submission.csv')
-hex_id2idx_dic = {v:k for k,v in customer_hex_id_to_int(sample_sub_df['customer_id']).to_dict().items()}
-
-#%%
+# %%
 sub_list = [arts_id_list2str(pop_items) for _ in range(len(sample_sub_df))]
 sub_dic = my_sub_df.set_index('customer_id')['prediction'].to_dict()
 for hex_id, pred in sub_dic.items():
