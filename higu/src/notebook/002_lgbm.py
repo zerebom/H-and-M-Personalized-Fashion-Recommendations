@@ -4,9 +4,9 @@ import os
 import pprint
 import sys
 from collections import defaultdict
-from datetime import date, datetime, timedelta
 from pathlib import Path
 from time import time
+from datetime import date, datetime, timedelta
 
 import cudf
 import lightgbm as lgb
@@ -24,9 +24,10 @@ if True:
     from features import (AbstractBaseBlock, ModeCategoryBlock,
                           TargetEncodingBlock)
     from metrics import apk, mapk
-    from utils import (Categorize, article_id_int_to_str,
-                       article_id_str_to_int, customer_hex_id_to_int,
+    from utils import (Categorize, article_id_int_to_str,arts_id_list2str,
+                       article_id_str_to_int, customer_hex_id_to_int,phase_date,
                        reduce_mem_usage)
+    from eda_tools import visualize_importance
 
 
 root_dir = Path("/home/kokoro/h_and_m")
@@ -57,14 +58,6 @@ cust_cdf = to_cdf(customers)
 
 
 # ================================= time =================================
-def phase_date(diff_days: int):
-    # 最終日からx日前の日付をdatetimeで返す
-    last_date = date(year=2020, month=9, day=22)
-    return datetime.combine(
-        last_date -
-        timedelta(
-            days=diff_days),
-        datetime.min.time())
 
 
 datetime_dic = {
@@ -270,10 +263,7 @@ valid_key['target'] = valid_y
 valid_key['pred'].plot.hist()
 
 
-# %%
 
-def arts_id_list2str(x: list):
-    return '0' + ' 0'.join([str(v) for v in x[:12]])
 
 #%%
 valid_map_df = valid_key\
@@ -337,44 +327,5 @@ prefix = datetime.now().strftime("%m_%d_%H_%M")
 my_sub_df.to_csv(output_dir / f"submission_{prefix}.csv", index=False)
 my_sub_df
 
-
-# _my_sub_df = my_sub_df.set_index('customer_id')
-# _sample_sub_df = sample_sub_df.set_index('customer_id')
-# _sample_sub_df.update(_my_sub_df)
-# sub_df = _sample_sub_df.reset_index()
-
-my_sub_df
-
 # %%
-def visualize_importance(models, feat_train_df):
-    feature_importance_df = pd.DataFrame()
-    for i, model in enumerate(models):
-        print(i)
-        _df = pd.DataFrame()
-        _df["feature_importance"] = model.feature_importances_
-        _df["column"] = feat_train_df.columns
-        _df["fold"] = i + 1
-        feature_importance_df = pd.concat(
-            [feature_importance_df, _df], axis=0, ignore_index=True
-        )
-
-    order = (
-        feature_importance_df.groupby("column")
-        .sum()[["feature_importance"]]
-        .sort_values("feature_importance", ascending=False)
-        .index[:50]
-    )
-
-    fig, ax = plt.subplots(figsize=(12, max(4, len(order) * 0.2)))
-    sns.boxenplot(
-        data=feature_importance_df,
-        y="column",
-        x="feature_importance",
-        order=order,
-        ax=ax,
-        palette="viridis",
-    )
-    fig.tight_layout()
-    ax.grid()
-    return fig, ax
 visualize_importance([clf], train_X)

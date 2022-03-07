@@ -1,8 +1,22 @@
 # helper functions
+from datetime import date, datetime, timedelta
+
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 
+
+def phase_date(diff_days: int):
+    # 最終日からx日前の日付をdatetimeで返す
+    last_date = date(year=2020, month=9, day=22)
+    return datetime.combine(
+        last_date -
+        timedelta(
+            days=diff_days),
+        datetime.min.time())
+
+def arts_id_list2str(x: list):
+    return '0' + ' 0'.join([str(v) for v in x[:12]])
 
 def reduce_mem_usage(_df):
     """ iterate through all the columns of a dataframe and modify the data type
