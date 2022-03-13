@@ -185,14 +185,15 @@ def feature_generation(blocks, trans_cdf, art_cdf, cust_cdf):
     cust_feat_cdf = cust_cdf[['customer_id']]
 
     for block in tqdm(blocks):
-        if block.key_col == 'article_id':
-            art_feat_cdf = art_feat_cdf.merge(
-                block.fit(feature_df), how='left', on=block.key_col)
-        elif block.key_col == 'customer_id':
-            cust_feat_cdf = cust_feat_cdf.merge(
-                block.fit(feature_df),
-                how='left',
-                on=block.key_col)
+        with timer(prefix='fit {} '.format(block)):
+
+            block.add_suffix(phase)
+            feature_cdf = block.fit(feature_df)
+
+            if block.key_col == 'article_id':
+                art_feat_cdf = art_feat_cdf.merge(feature_cdf, how='left', on=block.key_col)
+            elif block.key_col == 'customer_id':
+                cust_feat_cdf = cust_feat_cdf.merge( feature_cdf, how='left', on=block.key_col)
 
     _art_cdf = art_cdf.copy()
     _cust_cdf = cust_cdf.copy()
