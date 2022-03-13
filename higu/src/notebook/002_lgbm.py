@@ -27,34 +27,35 @@ if True:
     from metrics import apk, mapk
     from utils import (Categorize, article_id_int_to_str,
                        article_id_str_to_int, arts_id_list2str,
-                       customer_hex_id_to_int, phase_date, reduce_mem_usage)
+                       customer_hex_id_to_int, phase_date, reduce_mem_usage,
+                       timer)
 
 
 root_dir = Path("/home/kokoro/h_and_m/higu")
 input_dir = root_dir / "input"
 output_dir = root_dir / "output"
-DRY_RUN = True
+DRY_RUN = False
+# %%
+%load_ext autoreload
+%autoreload 2
 
 # %%
 
 if not DRY_RUN:
-    transactions = pd.read_parquet(input_dir / 'transactions_train.parquet')
-    customers = pd.read_parquet(input_dir / 'customers.parquet')
-    articles = pd.read_parquet(input_dir / 'articles.parquet')
+    trans_cdf = cudf.read_parquet(input_dir / 'transactions_train.parquet')
+    cust_cdf = cudf.read_parquet(input_dir / 'customers.parquet')
+    art_cdf = cudf.read_parquet(input_dir / 'articles.parquet')
 else:
     sample = 0.05
-    transactions = pd.read_parquet(
+    trans_cdf = cudf.read_parquet(
         input_dir / f"transactions_train_sample_{sample}.parquet")
-    customers = pd.read_parquet(
+    cust_cdf = cudf.read_parquet(
         input_dir / f'customers_sample_{sample}.parquet')
-    articles = pd.read_parquet(input_dir /
+    art_cdf = cudf.read_parquet(input_dir /
                                f'articles_train_sample_{sample}.parquet')
 
 
 to_cdf = cudf.DataFrame.from_pandas
-trans_cdf = to_cdf(transactions)
-art_cdf = to_cdf(articles)
-cust_cdf = to_cdf(customers)
 
 # %%
 # ================================= time =================================
