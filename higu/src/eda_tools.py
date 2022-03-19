@@ -8,7 +8,7 @@ def visualize_importance(models, feat_train_df):
     for i, model in enumerate(models):
         print(i)
         _df = pd.DataFrame()
-        _df["feature_importance"] = model.feature_importances_
+        _df["feature_importance"] = model.feature_importance()
         _df["column"] = feat_train_df.columns
         _df["fold"] = i + 1
         feature_importance_df = pd.concat(

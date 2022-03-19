@@ -274,7 +274,7 @@ clf.fit(
     train_X,
     train_y,
     eval_set=[(valid_X, valid_y)],
-    callbacks=[lgb.early_stopping(stopping_rounds=100)]
+    callbacks=[lgb.early_stopping(stopping_rounds=100),lgb.log_evaluation(period=100)]
 )
 
 
