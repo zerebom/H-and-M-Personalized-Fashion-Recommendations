@@ -1,5 +1,9 @@
-import pandas as pd
+from typing import Any, Dict, List, Tuple
+
 import cudf
+import nmslib
+import numpy as np
+import pandas as pd
 from tqdm import tqdm
 
 to_cdf = cudf.DataFrame.from_pandas
@@ -20,6 +24,32 @@ def candidates_dict2df(candidates_dict):
     cdf = cdf.drop_duplicates().reset_index(drop=True)
     return cdf
 
+
+def create_nmslib_index(
+    vector_dict: Dict[Any, np.ndarray],
+    efSearch: int,
+    method: str = "hnsw",
+    space: str = "cosinesimil",
+    post: int = 2,
+    efConstruction: int = 300,  # efConstruction の値を大きくするほど検索精度が向上するが、インデックス作成時間が伸びる
+    M: int = 30,  # M の値をある程度まで大きくすると、再現性が向上して検索時間が短くなるが、インデックス作成時間が伸びる (5 ~ 100 が妥当な範囲)
+) -> Tuple[Any, List[Any]]:
+    print("train NMSLib")
+    nmslib_index = nmslib.init(method=method, space=space)
+    embs = np.stack(list(vector_dict.values()))
+    keys = list(vector_dict.keys())
+    nmslib_index.addDataPointBatch(embs)
+
+    index_time_params = {"M": M, "efConstruction": efConstruction, "post": post}
+    nmslib_index.createIndex(index_time_params, print_progress=True)
+
+    # efSearch を大きい値に設定しないと knnQuery で指定した数(k)より少ない結果が返ってきてしまう
+    # https://github.com/nmslib/nmslib/issues/172#issuecomment-281376808
+    # max(k, efSearch) を設定すると良いらしい
+    query_time_params = {"efSearch": efSearch}
+    nmslib_index.setQueryTimeParams(query_time_params)
+    return nmslib_index, keys
+
 class AbstractCGBlock:
     def fit(self, input_df: pd.DataFrame, y=None):
         return self.transform(input_df)
@@ -29,6 +59,64 @@ class AbstractCGBlock:
 
     def get_cudf(self):
         return to_cdf(self.out_df)
+
+
+class ArticlesSimilartoThoseUsersHavePurchased(AbstractCGBlock):
+    """
+        transactionとアイテムのエンべディングを使って、
+        ユーザが過去の購入商品と似ている商品を取得する
+    """
+
+    def __init__(
+        self,
+        article_emb_dict: Dict[Any, np.ndarray],
+        max_neighbors: int,
+        k_neighbors: int,
+        target_articles: List[int],
+
+    ) -> None:
+        # NMSLib に検索対象となるベクトルを登録する
+        nmslib_index, registered_article_ids = create_nmslib_index(
+            vector_dict=article_emb_dict, efSearch=max_neighbors
+        )
+        self.nmslib_index = nmslib_index
+        self.lib_idx_2_art_id = { i: art_id for i, art_id in enumerate(registered_article_ids)}
+        self.max_neighbors = max_neighbors
+        self.k_neighbors = k_neighbors
+        self.article_emb_dict = article_emb_dict
+        self.target_articles = target_articles
+
+    def transform(self, _trans_cdf):
+        trans_cdf = _trans_cdf.copy()
+        target_customers = trans_cdf['customer_id'].drop_duplicates().to_pandas().values
+        log_dict = (
+            trans_cdf
+            .groupby(["customer_id"])["article_id"]
+            .agg(list)
+            .to_dict()
+        )
+        target_articles_set = set(self.target_articles)
+        candidates_dict = {}
+        for customer_id in tqdm(target_customers):
+            customer_bought_article_ids = log_dict[customer_id]
+            candidate_ids = []
+
+            # ユーザの購入商品ごとに近傍アイテムを取得
+            for article_id in customer_bought_article_ids:
+                article_emb = self.article_emb_dict[article_id]
+                scoutee_neighbor_ids, _ = self.nmslib_index.knnQuery(
+                    article_emb, k=self.k_neighbors
+                )
+                candidate_ids.extend(list(scoutee_neighbor_ids))
+
+            # lib_idx_2_art_id でnsmlibのindex順を article_id に変換
+            candidate_ids = [self.lib_idx_2_art_id[i] for i in candidate_ids]
+
+            # drop duplicates & 指定したarticle_ids 以外除去 & max_neighborsでlimit
+            candidate_ids = list(set(candidate_ids)&target_articles_set)[:self.max_neighbors]
+            candidates_dict[customer_id] = candidate_ids
+
+        return candidates_dict
 
 
 class LastNWeekArticles(AbstractCGBlock):
