@@ -73,6 +73,7 @@ class ArticlesSimilartoThoseUsersHavePurchased(AbstractCGBlock):
         max_neighbors: int,
         k_neighbors: int,
         target_articles: List[int],
+        target_customers: List[int]
 
     ) -> None:
         # NMSLib に検索対象となるベクトルを登録する
@@ -85,12 +86,13 @@ class ArticlesSimilartoThoseUsersHavePurchased(AbstractCGBlock):
         self.k_neighbors = k_neighbors
         self.article_emb_dict = article_emb_dict
         self.target_articles = target_articles
+        self.target_customers = target_customers
 
     def transform(self, _trans_cdf):
-        trans_cdf = _trans_cdf.copy()
-        target_customers = trans_cdf['customer_id'].drop_duplicates().to_pandas().values
+        trans_df = _trans_cdf.to_pandas()
+        target_customers = trans_df['customer_id'].drop_duplicates().values
         log_dict = (
-            trans_cdf
+            trans_df
             .groupby(["customer_id"])["article_id"]
             .agg(list)
             .to_dict()
