@@ -27,6 +27,7 @@ class EmbBlock(AbstractBaseBlock):
         out_df = cudf.DataFrame(self.emb_dic).T
         out_df.columns = [f'{col}_emb' for col in out_df.columns]
         out_df = out_df.reset_index().rename({'index': self.key_col}, axis=1)
+        out_df = out_df.iloc[:,:11]
 
         return out_df
 

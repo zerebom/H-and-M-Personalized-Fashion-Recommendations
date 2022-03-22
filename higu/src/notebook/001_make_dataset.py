@@ -22,7 +22,7 @@ if True:
                        reduce_mem_usage)
 
 # %%
-root_dir = Path("/home/kokoro/h_and_m")
+root_dir = Path("/home/kokoro/h_and_m/higu")
 input_dir = root_dir / "input"
 output_dir = root_dir / "output"
 
@@ -135,3 +135,5 @@ sample_sub.to_parquet(
     output_dir /
     'validation_ground_truth.parquet',
     index=False)
+
+# %%

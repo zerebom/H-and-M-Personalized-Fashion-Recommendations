@@ -1,4 +1,4 @@
-# %%
+#%%
 import gc
 import json
 import os
@@ -24,20 +24,23 @@ if True:
                              BoughtItemsAtInferencePhase, LastNWeekArticles,
                              PopularItemsoftheLastWeeks, candidates_dict2df)
     from eda_tools import visualize_importance
-    from features import (AbstractBaseBlock, ModeCategoryBlock,EmbBlock,
+    from features import (AbstractBaseBlock, EmbBlock, ModeCategoryBlock,
                           TargetEncodingBlock)
     from metrics import apk, mapk
     from utils import (Categorize, article_id_int_to_str,
                        article_id_str_to_int, arts_id_list2str,
                        customer_hex_id_to_int, phase_date, reduce_mem_usage,
-                       timer)
+                       setup_logger, timer)
 
 
 root_dir = Path("/home/kokoro/h_and_m/higu")
 input_dir = root_dir / "input"
 output_dir = root_dir / "output"
-%load_ext autoreload
-%autoreload 2
+exp_name = '008_lgbm'
+
+log_dir = output_dir/'log'/exp_name
+log_dir.mkdir(parents=True,exist_ok=True)
+log_file = log_dir/ f'{date.today()}.log'
 
 # %%
 
@@ -54,6 +57,14 @@ else:
         input_dir / f'customers_sample_{sample}.parquet').sample(10000)
     art_cdf = cudf.read_parquet(input_dir /
                                f'articles_train_sample_{sample}.parquet').sample(10000)
+
+#%%
+
+# ログの初期設定を行う
+
+logger = setup_logger(log_file)
+#%%
+
 
 # %%
 # ================================= time =================================
@@ -107,7 +118,7 @@ purchase_user_ids = preds_of_not_purchase_user_cdf.query('pred>=0.4')['customer_
 
 candidate_blocks = [
     # *[PopularItemsoftheLastWeeks(customer_ids)],
-    # *[LastNWeekArticles(n_weeks=2)],
+    *[LastNWeekArticles(n_weeks=2)],
     *[ArticlesSimilartoThoseUsersHavePurchased(
             article_emb_dic,
             50,
@@ -176,16 +187,19 @@ def candidate_generation(blocks, trans_cdf, art_cdf, cust_cdf, y_cdf=None):
         blocks.append(BoughtItemsAtInferencePhase(y_cdf))
 
     candidates_dict = {}
+    candidates_df = None
+
     for i, block in enumerate(blocks):
-        if i == 0:
-            candidates_dict = block.fit(trans_cdf)
-        else:
-            new_dic = block.fit(trans_cdf)
-            for key, value in candidates_dict.items():
-                if key in new_dic:
-                    value.extend(new_dic[key])
-    candidates_cdf = candidates_dict2df(candidates_dict)
-    return candidates_cdf
+        with timer(logger=logger,prefix='fit {} '.format(block)):
+            if i == 0:
+                candidates_dict = block.fit(trans_cdf)
+            else:
+                new_dic = block.fit(trans_cdf)
+                for key, value in candidates_dict.items():
+                    if key in new_dic:
+                        value.extend(new_dic[key])
+        candidates_df = candidates_dict2df(candidates_dict).to_pandas()
+    return candidates_df
 
 
 def feature_generation(blocks, trans_cdf, art_cdf, cust_cdf):
@@ -206,7 +220,7 @@ def feature_generation(blocks, trans_cdf, art_cdf, cust_cdf):
     cust_feat_cdf = cust_cdf[['customer_id']]
 
     for block in tqdm(blocks):
-        with timer(prefix='fit {} '.format(block)):
+        with timer(logger=logger,prefix='fit {} '.format(block)):
 
             # block.add_suffix(phase)
             feature_cdf = block.fit(feature_df)
@@ -216,13 +230,13 @@ def feature_generation(blocks, trans_cdf, art_cdf, cust_cdf):
             elif block.key_col == 'customer_id':
                 cust_feat_cdf = cust_feat_cdf.merge( feature_cdf, how='left', on=block.key_col)
 
-    _art_cdf = art_cdf.copy()
-    _cust_cdf = cust_cdf.copy()
+    # _art_cdf = art_cdf.copy()
+    # _cust_cdf = cust_cdf.copy()
 
-    _cust_cdf = _cust_cdf.merge(cust_feat_cdf, on='customer_id', how='left')
-    _art_cdf = _art_cdf.merge(art_feat_cdf, on='article_id', how='left')
+    cust_df = cust_cdf.merge(cust_feat_cdf, on='customer_id', how='left').to_pandas()
+    art_df = art_cdf.merge(art_feat_cdf, on='article_id', how='left').to_pandas()
 
-    return _art_cdf, _cust_cdf
+    return art_df, cust_df
 
 
 def make_trainable_data(
@@ -233,28 +247,31 @@ def make_trainable_data(
         cust_cdf,
         phase):
     X_end_date = datetime_dic['X'][phase]['end_date']
+    logger.info(f'make {phase} start.')
 
-    y_cdf = None
+    y_cdf,y_df = None, None
     if phase is not 'test':
         y_start_date = datetime_dic['y'][phase]['start_date']
         y_end_date = datetime_dic['y'][phase]['end_date']
         y_cdf = make_y_cdf(raw_trans_cdf, y_start_date, y_end_date)
+        y_df = y_cdf.to_pandas()
 
     trans_cdf = clip_transactions(raw_trans_cdf, X_end_date)
+    trans_df = trans_cdf.to_pandas()
 
     print("start candidate generation")
-    candidates_cdf = candidate_generation(
+    candidates_df = candidate_generation(
         candidate_blocks, trans_cdf, art_cdf, cust_cdf, y_cdf)
 
     print("start feature generation")
-    art_feat_cdf, cust_feat_cdf = feature_generation(
+    art_feat_df, cust_feat_df = feature_generation(
         feature_blocks, trans_cdf, art_cdf, cust_cdf)
 
-    X = candidates_cdf\
-        .merge(cust_feat_cdf, how='left', on='customer_id')\
-        .merge(art_feat_cdf, how='left', on='article_id')
+    X = candidates_df\
+        .merge(cust_feat_df, how='left', on='customer_id')\
+        .merge(art_feat_df, how='left', on='article_id')
 
-    recent_items = trans_cdf.groupby('article_id')['week'].max(
+    recent_items = trans_df.groupby('article_id')['week'].max(
     ).reset_index().query('week>96')['article_id'].values
     X = X[X["article_id"].isin(recent_items)]
 
@@ -263,20 +280,18 @@ def make_trainable_data(
 
     if phase is 'test':
         X = X.drop(columns=key_cols)
-        return reduce_mem_usage(
-            key_df.to_pandas()), reduce_mem_usage(
-            X.to_pandas()), None
+        return reduce_mem_usage(key_df), reduce_mem_usage(X), None
 
-    y = X.merge(y_cdf, how='left', on=key_cols)[
+    y = X.merge(y_df, how='left', on=key_cols)[
         'purchased'].fillna(0).astype(int)
-    print("X_shape:", X.shape, "y_mean:", y.mean())
+
+    logger.info(f"X_shape:, {X.shape}, y_mean: {y.mean()}")
     X = X.drop(columns=key_cols)
-    return reduce_mem_usage(
-        key_df.to_pandas()), reduce_mem_usage(
-        X.to_pandas()), y.to_pandas()
+    return reduce_mem_usage(key_df), reduce_mem_usage(X), y
 
 
 # %%
+
 train_key, train_X, train_y = make_trainable_data(
     candidate_blocks, feature_blocks, trans_cdf, art_cdf, cust_cdf, phase='train')
 valid_key, valid_X, valid_y = make_trainable_data(
@@ -287,7 +302,9 @@ test_key, test_X, _ = make_trainable_data(
 
 # %%
 
+lgb.register_logger(logger)
 
+#%%
 cat_features = train_X.select_dtypes('category').columns.tolist()
 clf = lgb.LGBMClassifier(**param)
 clf.fit(
@@ -319,10 +336,11 @@ valid_map_df["target"] = valid_key[valid_key['target'] == 1]\
     .apply(list)\
     .apply(lambda x: arts_id_list2str(x))
 valid_map_df['target'] = valid_map_df['target'].replace(np.nan, '')
-mapk(
-    valid_map_df['article_id'].map(
-        lambda x: x.split()), valid_map_df['target'].map(
-            lambda x: x.split()), k=12)
+#%%
+
+mapk_val = mapk(valid_map_df['article_id'].map( lambda x: x.split()), valid_map_df['target'].map( lambda x: x.split()), k=12)
+
+logger.info(f"mapk:{mapk_val}")
 
 
 # %%
@@ -369,35 +387,34 @@ my_sub_df.to_csv(output_dir / f"submission_{prefix}.csv", index=False)
 my_sub_df
 
 # %%
-visualize_importance([clf], train_X)
+fig, ax = visualize_importance([clf], train_X)
+fig.savefig(log_dir / "feature_importance.png")
 
 #%%
-clf.feature_importances_
 
-#%%
-d2 = candidate_blocks[1].transform(trans_cdf)
-#%%
+# d2 = candidate_blocks[1].transform(trans_cdf)
+# #%%
 
-list(d2.keys())[0]
-#%%
-candidates_cdf = candidates_dict2df(d2)
-#%%
+# list(d2.keys())[0]
+# #%%
+# candidates_cdf = candidates_dict2df(d2)
+# #%%
 
-tuples = []
-for cust, articles in tqdm(d1.items()):
-    for art in articles:
-        tuples.append((cust, art))
+# tuples = []
+# for cust, articles in tqdm(d1.items()):
+#     for art in articles:
+#         tuples.append((cust, art))
 
-df = pd.DataFrame(tuples)
-df.columns = ['customer_id', 'article_id']
-#%%
-df.dtypes
+# df = pd.DataFrame(tuples)
+# df.columns = ['customer_id', 'article_id']
+# #%%
+# df.dtypes
 
 
-#%%
-cudf.from_pandas(trans_cdf.to_pandas())
-#%%
-pidx = Int64Index([1, 2, 10, 20], dtype='int64')
-gidx = cudf.from_pandas(pidx)
-#%%
-cudf.from_pandas(pd.DataFrame(np.zeros((10,10))))
+# #%%
+# cudf.from_pandas(trans_cdf.to_pandas())
+# #%%
+# pidx = Int64Index([1, 2, 10, 20], dtype='int64')
+# gidx = cudf.from_pandas(pidx)
+# #%%
+# cudf.from_pandas(pd.DataFrame(np.zeros((10,10))))

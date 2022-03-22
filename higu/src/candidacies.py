@@ -90,16 +90,16 @@ class ArticlesSimilartoThoseUsersHavePurchased(AbstractCGBlock):
 
     def transform(self, _trans_cdf):
         trans_df = _trans_cdf.to_pandas()
-        target_customers = trans_df['customer_id'].drop_duplicates().values
         log_dict = (
             trans_df
             .groupby(["customer_id"])["article_id"]
             .agg(list)
             .to_dict()
         )
+        self.target_customers = list(set(self.target_customers) & set(list(trans_df['customer_id'].unique())))
         target_articles_set = set(self.target_articles)
         candidates_dict = {}
-        for customer_id in tqdm(target_customers):
+        for customer_id in tqdm(self.target_customers):
             customer_bought_article_ids = log_dict[customer_id]
             candidate_ids = []
 
