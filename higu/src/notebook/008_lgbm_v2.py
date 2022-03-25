@@ -1,13 +1,8 @@
 # %%
-import gc
 import json
-import os
-import pprint
 import sys
-from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from time import time
 
 import cudf
 import lightgbm as lgb
@@ -24,11 +19,11 @@ if True:
                              BoughtItemsAtInferencePhase, LastNWeekArticles,
                              PopularItemsoftheLastWeeks, candidates_dict2df)
     from eda_tools import visualize_importance
-    from features import (AbstractBaseBlock, ModeCategoryBlock,EmbBlock,
+    from features import (AbstractBaseBlock, EmbBlock, ModeCategoryBlock,
                           TargetEncodingBlock)
     from metrics import apk, mapk
     from utils import (Categorize, article_id_int_to_str,
-                       article_id_str_to_int, arts_id_list2str,
+                       article_id_str_to_int, arts_id_list2str,read_cdf,
                        customer_hex_id_to_int, phase_date, reduce_mem_usage,
                        timer)
 
@@ -42,18 +37,8 @@ output_dir = root_dir / "output"
 # %%
 
 DRY_RUN = False
-if not DRY_RUN:
-    trans_cdf = cudf.read_parquet(input_dir / 'transactions_train.parquet')
-    cust_cdf = cudf.read_parquet(input_dir / 'customers.parquet')
-    art_cdf = cudf.read_parquet(input_dir / 'articles.parquet')
-else:
-    sample = 0.05
-    trans_cdf = cudf.read_parquet(
-        input_dir / f"transactions_train_sample_{sample}.parquet").sample(100000)
-    cust_cdf = cudf.read_parquet(
-        input_dir / f'customers_sample_{sample}.parquet').sample(10000)
-    art_cdf = cudf.read_parquet(input_dir /
-                               f'articles_train_sample_{sample}.parquet').sample(10000)
+
+trans_cdf,cust_cdf,art_cdf = read_cdf(input_dir,DRY_RUN)
 
 # %%
 # ================================= time =================================

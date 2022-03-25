@@ -5,9 +5,35 @@ from time import time
 
 import numpy as np
 import pandas as pd
+import cudf
 from sklearn.base import BaseEstimator, TransformerMixin
 
 from logging import getLogger, StreamHandler, Formatter, FileHandler, DEBUG
+
+def get_var_names(vars):
+    # 変数名を取得する
+    names=[]
+    for var in vars:
+        for k,v in globals().items():
+            if id(v) == id(var) and not k.startswith('_'):
+                names.append(k)
+    return names
+
+def read_cdf(input_dir,DRY_RUN):
+    if not DRY_RUN:
+        trans_cdf = cudf.read_parquet(input_dir / 'transactions_train.parquet')
+        cust_cdf = cudf.read_parquet(input_dir / 'customers.parquet')
+        art_cdf = cudf.read_parquet(input_dir / 'articles.parquet')
+    else:
+        sample = 0.05
+        trans_cdf = cudf.read_parquet(
+            input_dir / f"transactions_train_sample_{sample}.parquet")
+        cust_cdf = cudf.read_parquet(
+            input_dir / f'customers_sample_{sample}.parquet')
+        art_cdf = cudf.read_parquet(input_dir /
+                                f'articles_train_sample_{sample}.parquet')
+    return trans_cdf,cust_cdf,art_cdf
+
 
 def setup_logger(log_folder, modname=__name__):
     logger = getLogger(modname)

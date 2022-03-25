@@ -27,43 +27,27 @@ if True:
     from features import (AbstractBaseBlock, EmbBlock, ModeCategoryBlock,
                           TargetEncodingBlock)
     from metrics import apk, mapk
-    from utils import (Categorize, article_id_int_to_str,
-                       article_id_str_to_int, arts_id_list2str,
-                       customer_hex_id_to_int, phase_date, reduce_mem_usage,
-                       setup_logger, timer)
+    from utils import (article_id_int_to_str, article_id_str_to_int,get_var_names,
+                       arts_id_list2str, customer_hex_id_to_int, phase_date,
+                       read_cdf, reduce_mem_usage, setup_logger, timer)
 
 
 root_dir = Path("/home/kokoro/h_and_m/higu")
 input_dir = root_dir / "input"
-output_dir = root_dir / "output"
 exp_name = '008_lgbm'
-
+output_dir = root_dir / "output" / exp_name
 log_dir = output_dir/'log'/exp_name
+
+output_dir.mkdir(parents=True,exist_ok=True)
 log_dir.mkdir(parents=True,exist_ok=True)
+
 log_file = log_dir/ f'{date.today()}.log'
+logger = setup_logger(log_file)
 
 # %%
 
-DRY_RUN = False
-if not DRY_RUN:
-    trans_cdf = cudf.read_parquet(input_dir / 'transactions_train.parquet')
-    cust_cdf = cudf.read_parquet(input_dir / 'customers.parquet')
-    art_cdf = cudf.read_parquet(input_dir / 'articles.parquet')
-else:
-    sample = 0.05
-    trans_cdf = cudf.read_parquet(
-        input_dir / f"transactions_train_sample_{sample}.parquet").sample(100000)
-    cust_cdf = cudf.read_parquet(
-        input_dir / f'customers_sample_{sample}.parquet').sample(10000)
-    art_cdf = cudf.read_parquet(input_dir /
-                               f'articles_train_sample_{sample}.parquet').sample(10000)
-
-#%%
-
-# ログの初期設定を行う
-
-logger = setup_logger(log_file)
-#%%
+DRY_RUN = True
+trans_cdf,cust_cdf,art_cdf = read_cdf(input_dir, DRY_RUN)
 
 
 # %%
@@ -95,9 +79,9 @@ def make_y_cdf(
     y_cdf['purchased'] = 1
     return y_cdf
 
-
 def clip_transactions(transactions: cudf.DataFrame, end_date: datetime):
     return transactions.query(f't_dat<@end_date')
+
 #%%
 
 def jsonKeys2int(x):
@@ -176,10 +160,10 @@ param = {
     'num_leaves': 45
 }
 
-# %%
 
 
 #%%
+
 def candidate_generation(blocks, trans_cdf, art_cdf, cust_cdf, y_cdf=None):
     customer_ids = list(cust_cdf['customer_id'].to_pandas().unique())
 
@@ -294,17 +278,29 @@ def make_trainable_data(
 
 train_key, train_X, train_y = make_trainable_data(
     candidate_blocks, feature_blocks, trans_cdf, art_cdf, cust_cdf, phase='train')
+
 valid_key, valid_X, valid_y = make_trainable_data(
     candidate_blocks, feature_blocks, trans_cdf, art_cdf, cust_cdf, phase='valid')
 test_key, test_X, _ = make_trainable_data(
     candidate_blocks, feature_blocks, trans_cdf, art_cdf, cust_cdf, phase='test')
+#%%
 
+train_X.dtypes.values
+#%%
 
-# %%
+def save_dfs(df_list):
+    df_name_list = get_var_names(df_list)
+    for name, df in zip(df_name_list,df_list):
+        df.to_pickle(output_dir/f'{name}.pkl')
 
-lgb.register_logger(logger)
+df_list = [train_key, train_X, train_y,valid_key, valid_X, valid_y,test_key, test_X]
+if not DRY_RUN:
+    save_dfs(df_list)
 
 #%%
+
+#%%
+lgb.register_logger(logger)
 cat_features = train_X.select_dtypes('category').columns.tolist()
 clf = lgb.LGBMClassifier(**param)
 clf.fit(
@@ -389,32 +385,3 @@ my_sub_df
 # %%
 fig, ax = visualize_importance([clf], train_X)
 fig.savefig(log_dir / "feature_importance.png")
-
-#%%
-
-# d2 = candidate_blocks[1].transform(trans_cdf)
-# #%%
-
-# list(d2.keys())[0]
-# #%%
-# candidates_cdf = candidates_dict2df(d2)
-# #%%
-
-# tuples = []
-# for cust, articles in tqdm(d1.items()):
-#     for art in articles:
-#         tuples.append((cust, art))
-
-# df = pd.DataFrame(tuples)
-# df.columns = ['customer_id', 'article_id']
-# #%%
-# df.dtypes
-
-
-# #%%
-# cudf.from_pandas(trans_cdf.to_pandas())
-# #%%
-# pidx = Int64Index([1, 2, 10, 20], dtype='int64')
-# gidx = cudf.from_pandas(pidx)
-# #%%
-# cudf.from_pandas(pd.DataFrame(np.zeros((10,10))))
