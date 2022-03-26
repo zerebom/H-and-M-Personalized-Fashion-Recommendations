@@ -28,7 +28,7 @@ if True:
 
 root_dir = Path("/home/kokoro/h_and_m/higu")
 input_dir = root_dir / "input"
-exp_name = '009_lgbm'
+exp_name = '008_lgbm'
 output_dir = root_dir / "output" / exp_name
 log_dir = output_dir/'log'/exp_name
 

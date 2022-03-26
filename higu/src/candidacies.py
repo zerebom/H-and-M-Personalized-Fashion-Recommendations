@@ -32,7 +32,7 @@ def create_nmslib_index(
     space: str = "cosinesimil",
     post: int = 2,
     efConstruction: int = 300,  # efConstruction の値を大きくするほど検索精度が向上するが、インデックス作成時間が伸びる
-    M: int = 30,  # M の値をある程度まで大きくすると、再現性が向上して検索時間が短くなるが、インデックス作成時間が伸びる (5 ~ 100 が妥当な範囲)
+    M: int = 60,  # M の値をある程度まで大きくすると、再現性が向上して検索時間が短くなるが、インデックス作成時間が伸びる (5 ~ 100 が妥当な範囲)
 ) -> Tuple[Any, List[Any]]:
     print("train NMSLib")
     nmslib_index = nmslib.init(method=method, space=space)
@@ -119,6 +119,7 @@ class ArticlesSimilartoThoseUsersHavePurchased(AbstractCGBlock):
             candidates_dict[customer_id] = candidate_ids
 
         return candidates_dict
+
 
 
 class LastNWeekArticles(AbstractCGBlock):
