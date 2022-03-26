@@ -11,6 +11,8 @@ import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
+import pickle
+
 if True:
     sys.path.append("../")
     from candidacies import (ArticlesSimilartoThoseUsersHavePurchased,
@@ -139,10 +141,10 @@ feature_blocks = [EmbBlock('article_id',article_emb_dic),
                                                        'garment_group_no']],
                   ]
 
-
 param = {
     "objective": "binary",
-    "metric": 'average_precision',
+    "metric": 'mean_average_precision',
+    "eval_at":list(range(1,13)),
     "verbosity": -1,
     "boosting": "gbdt",
     "is_unbalance": True,
@@ -272,6 +274,7 @@ def make_trainable_data(
                     values)
 
     X = X[X["article_id"].isin(recent_items)]
+    X = X.reset_index(drop=True)
 
 
     # yの作成
@@ -343,7 +346,23 @@ for phase in phases:
 if not DRY_RUN:
     for phase, phase_dic in data_dic.items():
         for df_name, df in phase_dic.items():
-            df.to_pickle(output_dir/f'{phase}_{df_name}.pkl')
+            try:
+                df.to_pickle(output_dir/f'{phase}_{df_name}.pkl')
+            except:
+                pass
+
+#%%
+
+#中間生成物の読み込み
+phases = ['train','valid','test']
+data_dic = {}
+for phase in phases:
+    data_dic[phase] = {}
+    for name in ['X','y','key']:
+        try:
+            data_dic[phase][name] = pd.read_pickle(output_dir/f'{phase}_{name}.pkl')
+        except:
+            pass
 
 #%%
 
@@ -372,10 +391,15 @@ valid_key['pred'].plot.hist()
 test_y = clf.predict_proba(test_X)[:, 1]
 test_key['pred'] = test_y
 
-
+#%%
+lgbm_path =  output_dir / 'lgbm.pickle'
+with open(lgbm_path, 'wb') as f:
+    pickle.dump(clf, f)
 
 #%%
 
+
+#%%
 
 def get_pop_items(trans_cdf):
     pop = PopularItemsoftheLastWeeks([1])
