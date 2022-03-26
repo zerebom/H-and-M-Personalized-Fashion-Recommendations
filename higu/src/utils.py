@@ -1,4 +1,5 @@
 # helper functions
+from pathlib import Path
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from time import time
@@ -9,6 +10,14 @@ import cudf
 from sklearn.base import BaseEstimator, TransformerMixin
 
 from logging import getLogger, StreamHandler, Formatter, FileHandler, DEBUG
+
+def jsonKeys2int(x):
+    """
+    文字列keyをintに変換する
+    """
+    if isinstance(x, dict):
+            return {int(k):v for k,v in x.items()}
+    return x
 
 def get_var_names(vars):
     # 変数名を取得する
@@ -162,3 +171,61 @@ class Categorize(BaseEstimator, TransformerMixin):
         data = {X.columns[i]: pd.Categorical(
             X.iloc[:, i], categories=self.categories[i]).codes for i in range(X.shape[1])}
         return pd.DataFrame(data=data)
+
+
+def squeeze_pred_df_to_submit_format(pred_df:pd.DataFrame, fill_logic=None, args=None)->pd.DataFrame:
+    '''
+    (cust_id,art_id,pred)の出力形式から提出形式のデータフレームを作成する。
+    customer_id毎に、article_idの空白文字区切りの文字列を作成する。
+
+    予測アイテムが12個未満の場合、fill_logicによって埋める。
+
+    pred_df(columns=[customer_id, article_id, pred, target])
+    ↓
+    submit_format_df(columns=[customer_id, article_ids, preds, targets])
+    '''
+    if fill_logic is None:
+        fill_logic = lambda x: x
+        args = None
+
+    submit_format_df = (pred_df
+        .sort_values(by=['customer_id', 'pred'], ascending=False)
+        .groupby('customer_id')['article_id']
+        .apply(list)
+        .apply(fill_logic, args=args)
+        .apply(arts_id_list2str)
+        .reset_index()
+        .set_index("customer_id")
+        )
+
+    if "target" in pred_df.columns:
+        submit_format_df["target"] = (pred_df[pred_df['target'] == 1]
+        .groupby('customer_id')['article_id']
+        .apply(list)
+        .apply(fill_logic)
+        .apply(arts_id_list2str)
+        )
+
+        submit_format_df["target"] = submit_format_df["target"].replace(np.nan, '')
+
+
+    submit_format_df = submit_format_df.rename(columns={'article_id': 'prediction'})
+
+    return submit_format_df
+
+
+def convert_sub_df_customer_id_to_str(input_dir:Path, sub_fmt_df:pd.DataFrame)-> pd.DataFrame:
+    # sub_dfの12桁のcustomer_idを元のcustomer_idに変換する
+    sample_df = pd.read_csv(input_dir / 'sample_submission.csv')
+    converted_sub_fmt_df = sample_df.copy()
+
+    hex_id2idx_dic = {v: k for k, v in customer_hex_id_to_int(
+        sample_df['customer_id']).to_dict().items()}
+
+    sub_list = ['' for _ in range(len(sample_df))]
+    sub_dic = sub_fmt_df['prediction'].to_dict()
+    for hex_id, pred in sub_dic.items():
+        sub_list[hex_id2idx_dic[hex_id]] = pred
+
+    converted_sub_fmt_df['prediction'] = sub_list
+    return converted_sub_fmt_df

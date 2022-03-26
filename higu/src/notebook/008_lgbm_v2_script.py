@@ -1,35 +1,30 @@
+o
 #%%
-import gc
 import json
-import os
-import pprint
 import sys
-from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from pathlib import Path
-from time import time
+from typing import Dict, List
 
 import cudf
 import lightgbm as lgb
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 from tqdm import tqdm
 
 if True:
     sys.path.append("../")
-    from candidacies import (AbstractCGBlock,
-                             ArticlesSimilartoThoseUsersHavePurchased,
+    from candidacies import (ArticlesSimilartoThoseUsersHavePurchased,
                              BoughtItemsAtInferencePhase, LastNWeekArticles,
                              PopularItemsoftheLastWeeks, candidates_dict2df)
     from eda_tools import visualize_importance
-    from features import (AbstractBaseBlock, EmbBlock, ModeCategoryBlock,
-                          TargetEncodingBlock)
-    from metrics import apk, mapk
-    from utils import (article_id_int_to_str, article_id_str_to_int,get_var_names,
-                       arts_id_list2str, customer_hex_id_to_int, phase_date,
-                       read_cdf, reduce_mem_usage, setup_logger, timer)
+    from features import EmbBlock, ModeCategoryBlock, TargetEncodingBlock
+    from metrics import mapk
+    from utils import (article_id_int_to_str, article_id_str_to_int,
+                       arts_id_list2str, convert_sub_df_customer_id_to_str,
+                       customer_hex_id_to_int, get_var_names, jsonKeys2int,
+                       phase_date, read_cdf, reduce_mem_usage, setup_logger,
+                       squeeze_pred_df_to_submit_format, timer)
 
 
 root_dir = Path("/home/kokoro/h_and_m/higu")
@@ -43,16 +38,40 @@ log_dir.mkdir(parents=True,exist_ok=True)
 
 log_file = log_dir/ f'{date.today()}.log'
 logger = setup_logger(log_file)
+#%%
 
+%load_ext autoreload
+%autoreload 2
+
+#%%
+
+ArtId = int
+CustId = int
+ArtIds = List[ArtId]
+CustIds = List[CustId]
 # %%
 
-DRY_RUN = True
+
+# ==================================================================================
+# ================================= データのロード =================================
+# ==================================================================================
 trans_cdf,cust_cdf,art_cdf = read_cdf(input_dir, DRY_RUN)
 
+with open(str(input_dir/ 'emb/article_emb.json')) as f:
+    article_emb_dic = json.load(f,object_hook=jsonKeys2int)
+
+target_articles = trans_cdf.query('week>=95')['article_id'].unique().to_pandas().values
+preds_of_not_purchase_user_cdf = cudf.read_parquet(input_dir /'005_preds_of_not_purchase_user.parquet')
+purchase_user_ids = preds_of_not_purchase_user_cdf.query('pred>=0.4')['customer_id'].unique().to_pandas().values
 
 # %%
-# ================================= time =================================
+#
+# ==============================================================================
+# ================================= 関数・変数の定義 ===========================
+# ==============================================================================
 
+
+# ================================= time =================================
 
 datetime_dic = {
     "X": {
@@ -82,22 +101,7 @@ def make_y_cdf(
 def clip_transactions(transactions: cudf.DataFrame, end_date: datetime):
     return transactions.query(f't_dat<@end_date')
 
-#%%
 
-def jsonKeys2int(x):
-    if isinstance(x, dict):
-            return {int(k):v for k,v in x.items()}
-    return x
-
-with open(str(input_dir/ 'emb/article_emb.json')) as f:
-    article_emb_dic = json.load(f,object_hook=jsonKeys2int)
-
-target_articles = trans_cdf.query('week>=95')['article_id'].unique().to_pandas().values
-#%%
-preds_of_not_purchase_user_cdf = cudf.read_parquet(output_dir /'005_preds_of_not_purchase_user.parquet')
-purchase_user_ids = preds_of_not_purchase_user_cdf.query('pred>=0.4')['customer_id'].unique().to_pandas().values
-
-#%%
 # ------------------------------blocks&params----------------------------------
 
 candidate_blocks = [
@@ -161,10 +165,15 @@ param = {
 }
 
 
-
-#%%
+# ================================= データ処理パイプライン =============================
 
 def candidate_generation(blocks, trans_cdf, art_cdf, cust_cdf, y_cdf=None):
+
+    '''
+    candidate_generation blocksを使って、推論候補対象を作成する。
+    (art_id, cust_id)をkeyに持つdataframeを返す。
+    '''
+
     customer_ids = list(cust_cdf['customer_id'].to_pandas().unique())
 
     if y_cdf is not None:
@@ -187,6 +196,10 @@ def candidate_generation(blocks, trans_cdf, art_cdf, cust_cdf, y_cdf=None):
 
 
 def feature_generation(blocks, trans_cdf, art_cdf, cust_cdf):
+    '''
+    feature_generation blocksを使って、特徴量を作成する。
+    art_id, cust_idをkeyに持つdataframeを返す。
+    '''
     recent_bought_cdf = cudf.DataFrame.from_pandas(
         trans_cdf.sort_values(['customer_id', 't_dat'], ascending=False)
         .to_pandas()
@@ -206,7 +219,6 @@ def feature_generation(blocks, trans_cdf, art_cdf, cust_cdf):
     for block in tqdm(blocks):
         with timer(logger=logger,prefix='fit {} '.format(block)):
 
-            # block.add_suffix(phase)
             feature_cdf = block.fit(feature_df)
 
             if block.key_col == 'article_id':
@@ -214,8 +226,6 @@ def feature_generation(blocks, trans_cdf, art_cdf, cust_cdf):
             elif block.key_col == 'customer_id':
                 cust_feat_cdf = cust_feat_cdf.merge( feature_cdf, how='left', on=block.key_col)
 
-    # _art_cdf = art_cdf.copy()
-    # _cust_cdf = cust_cdf.copy()
 
     cust_df = cust_cdf.merge(cust_feat_cdf, on='customer_id', how='left').to_pandas()
     art_df = art_cdf.merge(art_feat_cdf, on='article_id', how='left').to_pandas()
@@ -230,158 +240,183 @@ def make_trainable_data(
         art_cdf,
         cust_cdf,
         phase):
+
+    '''
+    CG→FEを経て学習可能なX ,y, keyを作成する
+    '''
+
     X_end_date = datetime_dic['X'][phase]['end_date']
     logger.info(f'make {phase} start.')
 
-    y_cdf,y_df = None, None
-    if phase is not 'test':
-        y_start_date = datetime_dic['y'][phase]['start_date']
-        y_end_date = datetime_dic['y'][phase]['end_date']
-        y_cdf = make_y_cdf(raw_trans_cdf, y_start_date, y_end_date)
-        y_df = y_cdf.to_pandas()
+    key_cols = ['customer_id', 'article_id']
+    y_cdf,y_df,y = None, None, None
 
-    trans_cdf = clip_transactions(raw_trans_cdf, X_end_date)
-    trans_df = trans_cdf.to_pandas()
+    #学習するtransaction期間を絞る
+    trans_df = clip_transactions(raw_trans_cdf, X_end_date).to_pandas()
 
-    print("start candidate generation")
+    # Xの作成
+    print("start candidate generation") #CG
     candidates_df = candidate_generation(
         candidate_blocks, trans_cdf, art_cdf, cust_cdf, y_cdf)
 
-    print("start feature generation")
+    print("start feature generation") #FE
     art_feat_df, cust_feat_df = feature_generation(
         feature_blocks, trans_cdf, art_cdf, cust_cdf)
 
-    X = candidates_df\
-        .merge(cust_feat_df, how='left', on='customer_id')\
-        .merge(art_feat_df, how='left', on='article_id')
+    # 予測対象ペアに特徴量をmergeする
+    X = (candidates_df
+        .merge(cust_feat_df, how='left', on='customer_id')
+        .merge(art_feat_df, how='left', on='article_id'))
 
-    recent_items = trans_df.groupby('article_id')['week'].max(
-    ).reset_index().query('week>96')['article_id'].values
+    # 最近購入されてないアイテムを取り除く
+    recent_items = (trans_df.
+                    groupby('article_id')['week'].
+                    max().
+                    reset_index().
+                    query('week>96')['article_id'].
+                    values)
+
     X = X[X["article_id"].isin(recent_items)]
 
-    key_cols = ['customer_id', 'article_id']
+
+    # yの作成
+    if phase is not 'test':
+        y_start_date = datetime_dic['y'][phase]['start_date']
+        y_end_date = datetime_dic['y'][phase]['end_date']
+        y_df = make_y_cdf(raw_trans_cdf, y_start_date, y_end_date).to_pandas()
+        y = X.merge(y_df, how='left', on=key_cols)['purchased'].fillna(0).astype(int)
+        logger.info(f"X_shape:, {X.shape}, y_mean: {y.mean()}")
+
+    #keyの作成
     key_df = X[key_cols]
-
-    if phase is 'test':
-        X = X.drop(columns=key_cols)
-        return reduce_mem_usage(key_df), reduce_mem_usage(X), None
-
-    y = X.merge(y_df, how='left', on=key_cols)[
-        'purchased'].fillna(0).astype(int)
-
-    logger.info(f"X_shape:, {X.shape}, y_mean: {y.mean()}")
     X = X.drop(columns=key_cols)
+
     return reduce_mem_usage(key_df), reduce_mem_usage(X), y
 
 
+def train_lgb(train_X,
+                train_y,
+                valid_X,
+                valid_y,
+                param,
+                logger,
+                early_stop_round,
+                log_period):
+
+    lgb.register_logger(logger)
+    clf = lgb.LGBMClassifier(**param)
+    clf.fit(
+        train_X,
+        train_y,
+        eval_set=[(valid_X, valid_y)],
+        callbacks=[lgb.early_stopping(stopping_rounds=early_stop_round),
+                   lgb.log_evaluation(period=log_period)]
+    )
+    val_pred = clf.predict_proba(valid_X)[:, 1]
+    return clf, val_pred
+
+
+
 # %%
 
-train_key, train_X, train_y = make_trainable_data(
-    candidate_blocks, feature_blocks, trans_cdf, art_cdf, cust_cdf, phase='train')
+# ==============================================================================
+# ================================= データ処理開始 =============================
+# ==============================================================================
 
-valid_key, valid_X, valid_y = make_trainable_data(
-    candidate_blocks, feature_blocks, trans_cdf, art_cdf, cust_cdf, phase='valid')
-test_key, test_X, _ = make_trainable_data(
-    candidate_blocks, feature_blocks, trans_cdf, art_cdf, cust_cdf, phase='test')
+#データの作成
+phases = ['train','valid','test']
+data_dic = {}
+
+for phase in phases:
+    data_dic[phase] = {}
+
+    key, X, y = make_trainable_data(
+        candidate_blocks,
+        feature_blocks,
+        trans_cdf, art_cdf,
+        cust_cdf,
+        phase=phase)
+
+    data_dic[phase]['key'] = key
+    data_dic[phase]['X'] = X
+    data_dic[phase]['y'] = y
+
+
+
 #%%
-
-train_X.dtypes.values
-#%%
-
-def save_dfs(df_list):
-    df_name_list = get_var_names(df_list)
-    for name, df in zip(df_name_list,df_list):
-        df.to_pickle(output_dir/f'{name}.pkl')
-
-df_list = [train_key, train_X, train_y,valid_key, valid_X, valid_y,test_key, test_X]
+#中間生成物の保存
 if not DRY_RUN:
-    save_dfs(df_list)
+    for phase, phase_dic in data_dic.items():
+        for df_name, df in phase_dic.items():
+            df.to_pickle(output_dir/f'{phase}_{df_name}.pkl')
 
 #%%
 
-#%%
-lgb.register_logger(logger)
-cat_features = train_X.select_dtypes('category').columns.tolist()
-clf = lgb.LGBMClassifier(**param)
-clf.fit(
-    train_X,
-    train_y,
-    eval_set=[(valid_X, valid_y)],
-    callbacks=[lgb.early_stopping(stopping_rounds=100),lgb.log_evaluation(period=100)]
-)
-
+#学習
+clf, val_pred = train_lgb(data_dic['train']["X"],
+            data_dic['train']["y"],
+            data_dic['valid']["X"],
+            data_dic['valid']["y"],
+            param,
+            logger,
+            early_stop_round=100,
+            log_period=100)
 
 # %%
 
-valid_key['pred'] = clf.predict_proba(valid_X)[:, 1]
+#推論の作成
+valid_key = data_dic['valid']['key']
+test_key = data_dic['test']['key']
+valid_y = data_dic['valid']['y']
+test_X = data_dic['test']['X']
+
+valid_key['pred'] = val_pred
 valid_key['target'] = valid_y
 valid_key['pred'].plot.hist()
 
+test_y = clf.predict_proba(test_X)[:, 1]
+test_key['pred'] = test_y
 
-# %%
-valid_map_df = valid_key\
-    .sort_values(by=['customer_id', 'pred'], ascending=False)\
-    .groupby('customer_id')['article_id']\
-    .apply(list)\
-    .apply(lambda x: arts_id_list2str(x))\
-    .reset_index()\
-    .set_index("customer_id")
 
-valid_map_df["target"] = valid_key[valid_key['target'] == 1]\
-    .groupby('customer_id')['article_id']\
-    .apply(list)\
-    .apply(lambda x: arts_id_list2str(x))
-valid_map_df['target'] = valid_map_df['target'].replace(np.nan, '')
+
 #%%
 
-mapk_val = mapk(valid_map_df['article_id'].map( lambda x: x.split()), valid_map_df['target'].map( lambda x: x.split()), k=12)
 
-logger.info(f"mapk:{mapk_val}")
+def get_pop_items(trans_cdf):
+    pop = PopularItemsoftheLastWeeks([1])
+    pop.fit(trans_cdf)
+    pop_items = list(pop.popular_items)
+    return pop_items
 
-
-# %%
-
-
-pop = PopularItemsoftheLastWeeks([1])
-pop.fit(trans_cdf)
-pop_items = list(pop.popular_items)
-
-
-def fill_pop_items(pred_ids, pop_items):
+def fill_pop_items(pred_ids:ArtIds, pop_items:ArtIds)->ArtIds:
     pred_ids.extend(pop_items)
     return pred_ids[:12]
 
+# 推論を提出形式に変換
+val_sub_fmt_df = squeeze_pred_df_to_submit_format(valid_key)
 
-test_y = clf.predict_proba(test_X)[:, 1]
-test_key['pred'] = test_y
-test_key = test_key.sort_values(by=['customer_id', 'pred'], ascending=False)
-my_sub_df = test_key.groupby('customer_id')['article_id'].apply(
-    list).apply(lambda x: fill_pop_items(x, pop_items))
-my_sub_df = my_sub_df.apply(arts_id_list2str).reset_index()
-my_sub_df.columns = ['customer_id', 'prediction']
-my_sub_df
+#人気アイテムで埋める
+pop_items = get_pop_items(trans_cdf)
+test_sub_fmt_df = squeeze_pred_df_to_submit_format(test_key,fill_logic=fill_pop_items, args=(pop_items,))
+
+#12桁idを文字列idに変換
+converted_sub_fmt_df = convert_sub_df_customer_id_to_str(input_dir, test_sub_fmt_df)
 
 
-# %%
-
-sample_sub_df = pd.read_csv(input_dir / 'sample_submission.csv')
-hex_id2idx_dic = {v: k for k, v in customer_hex_id_to_int(
-    sample_sub_df['customer_id']).to_dict().items()}
-
-# %%
-sub_list = [arts_id_list2str(pop_items) for _ in range(len(sample_sub_df))]
-sub_dic = my_sub_df.set_index('customer_id')['prediction'].to_dict()
-for hex_id, pred in sub_dic.items():
-    sub_list[hex_id2idx_dic[hex_id]] = pred
-
-my_sub_df = sample_sub_df.copy()
-my_sub_df['prediction'] = sub_list
-
-# %%
+#保存
 prefix = datetime.now().strftime("%m_%d_%H_%M")
-my_sub_df.to_csv(output_dir / f"submission_{prefix}.csv", index=False)
-my_sub_df
+converted_sub_fmt_df.to_csv(output_dir / f"submission_{prefix}.csv", index=False)
+
+
+
+#%%
+# 精度の確認
+mapk_val = mapk(val_sub_fmt_df['article_id'].map(lambda x: x.split()),
+                val_sub_fmt_df['target'].map( lambda x: x.split()),
+                k=12)
+
+logger.info(f"mapk:{mapk_val}")
 
 # %%
-fig, ax = visualize_importance([clf], train_X)
+fig, ax = visualize_importance([clf], data_dic['train']['X'])
 fig.savefig(log_dir / "feature_importance.png")
