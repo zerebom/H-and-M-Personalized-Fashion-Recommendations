@@ -1,5 +1,6 @@
 #%%
 import json
+import os
 import pickle
 import sys
 from datetime import date, datetime
@@ -43,7 +44,7 @@ if True:
 
 root_dir = Path("/home/kokoro/h_and_m/higu")
 input_dir = root_dir / "input"
-exp_name = "008_lgbm"
+exp_name = Path(os.path.basename(__file__)).stem
 output_dir = root_dir / "output" / exp_name
 log_dir = output_dir / "log" / exp_name
 
@@ -59,8 +60,8 @@ ArtId = int
 CustId = int
 ArtIds = List[ArtId]
 CustIds = List[CustId]
-# %%
 
+# %%
 
 # ==================================================================================
 # ================================= データのロード =================================
@@ -172,7 +173,7 @@ feature_blocks = [
 
 param = {
     "objective": "binary",
-    "metric": "mean_average_precision",
+    "metric": "average_precision",
     "eval_at": list(range(1, 13)),
     "verbosity": -1,
     "boosting": "gbdt",
@@ -194,7 +195,7 @@ param = {
 # ================================= データ処理パイプライン =============================
 
 
-def candidate_generation(blocks, trans_cdf, art_cdf, cust_cdf, y_cdf=None):
+def candidate_generation(blocks, trans_cdf, art_cdf, cust_cdf, y_cdf) -> pd.DataFrame:
 
     """
     candidate_generation blocksを使って、推論候補対象を作成する。
@@ -222,7 +223,7 @@ def candidate_generation(blocks, trans_cdf, art_cdf, cust_cdf, y_cdf=None):
     return candidates_df
 
 
-def feature_generation(blocks, trans_cdf, art_cdf, cust_cdf):
+def feature_generation(blocks, trans_cdf, art_cdf, cust_cdf) -> pd.DataFrame:
     """
     feature_generation blocksを使って、特徴量を作成する。
     art_id, cust_idをkeyに持つdataframeを返す。
@@ -264,9 +265,10 @@ def feature_generation(blocks, trans_cdf, art_cdf, cust_cdf):
     return art_df, cust_df
 
 
+#%%
 def make_trainable_data(
     candidate_blocks, feature_blocks, raw_trans_cdf, art_cdf, cust_cdf, phase
-):
+) -> pd.DataFrame:
 
     """
     CG→FEを経て学習可能なX ,y, keyを作成する
@@ -279,15 +281,20 @@ def make_trainable_data(
     y_cdf, y_df, y = None, None, None
 
     # 学習するtransaction期間を絞る
-    trans_df = clip_transactions(raw_trans_cdf, X_end_date).to_pandas()
+    trans_cdf = clip_transactions(raw_trans_cdf, X_end_date)
+    x_start_date, x_end_date = (
+        trans_cdf["t_dat"].min().astype("datetime64[D]"),
+        trans_cdf["t_dat"].max().astype("datetime64[D]"),
+    )
+    logger.info(f"x_start_date: {x_start_date} ~ x_end_date: {x_end_date}")
 
     # Xの作成
-    print("start candidate generation")  # CG
+    logger.info("start candidate generation")  # CG
     candidates_df = candidate_generation(
         candidate_blocks, trans_cdf, art_cdf, cust_cdf, y_cdf
     )
 
-    print("start feature generation")  # FE
+    logger.info("start feature generation")  # FE
     art_feat_df, cust_feat_df = feature_generation(
         feature_blocks, trans_cdf, art_cdf, cust_cdf
     )
@@ -299,10 +306,11 @@ def make_trainable_data(
 
     # 最近購入されてないアイテムを取り除く
     recent_items = (
-        trans_df.groupby("article_id")["week"]
+        trans_cdf.groupby("article_id")["week"]
         .max()
         .reset_index()
-        .query("week>96")["article_id"]
+        .query("week>96")
+        .to_pandas()["article_id"]
         .values
     )
 
@@ -313,10 +321,14 @@ def make_trainable_data(
     if phase is not "test":
         y_start_date = datetime_dic["y"][phase]["start_date"]
         y_end_date = datetime_dic["y"][phase]["end_date"]
+        logger.info(f"y_start_date: {y_start_date} ~ y_end_date: {y_end_date}")
         y_df = make_y_cdf(raw_trans_cdf, y_start_date, y_end_date).to_pandas()
         y = X.merge(y_df, how="left", on=key_cols)["purchased"].fillna(0).astype(int)
         logger.info(f"X_shape:, {X.shape}, y_mean: {y.mean()}")
 
+    logger.info(
+        f"X contains n_of_customers: {X['customer_id'].nunique()}, n_of_articles: {X['article_id'].nunique()}"
+    )
     # keyの作成
     key_df = X[key_cols]
     X = X.drop(columns=key_cols)
@@ -422,11 +434,8 @@ lgbm_path = output_dir / "lgbm.pickle"
 with open(lgbm_path, "wb") as f:
     pickle.dump(clf, f)
 
-#%%
-
 
 #%%
-
 
 def get_pop_items(trans_cdf):
     pop = PopularItemsoftheLastWeeks([1])
@@ -445,6 +454,8 @@ val_sub_fmt_df = squeeze_pred_df_to_submit_format(valid_key)
 
 # 人気アイテムで埋める
 pop_items = get_pop_items(trans_cdf)
+
+#TODO: ここで、全てのtest_購入ユーザに人気アイテムを与える実装にしたい。
 test_sub_fmt_df = squeeze_pred_df_to_submit_format(
     test_key, fill_logic=fill_pop_items, args=(pop_items,)
 )
@@ -458,7 +469,15 @@ prefix = datetime.now().strftime("%m_%d_%H_%M")
 converted_sub_fmt_df.to_csv(output_dir / f"submission_{prefix}.csv", index=False)
 
 
+# #%%
+# valid_true = pd.read_csv(input_dir/'valid_true_after0916.csv')
+# _df = val_sub_fmt_df.reset_index()
+
+
 #%%
+# TODO: カエルさんのやつでmapkを測れるようにする。
+# TODO: customeridをstr,hexを行き来できるようにする。
+
 # 精度の確認
 mapk_val = mapk(
     val_sub_fmt_df["prediction"].map(lambda x: x.split()),
