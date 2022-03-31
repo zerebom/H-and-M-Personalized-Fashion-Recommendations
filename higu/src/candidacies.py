@@ -8,18 +8,19 @@ from tqdm import tqdm
 
 to_cdf = cudf.DataFrame.from_pandas
 
-def candidates_dict2df(candidates_dict):
-    '''
+
+def candidates_dict2df(candidates_dict) -> cudf.DataFrame:
+    """
     {'customer_id_a': [article_id_1, article_id_2],'customer_id_b': [article_id_3, article_id_4]}
     -> pd.DataFrame([[customer_id_a, article_id_1], [customer_id_a, article_id_2],]...)
-    '''
+    """
     tuples = []
     for cust, articles in tqdm(candidates_dict.items()):
         for art in articles:
             tuples.append((cust, art))
 
     df = pd.DataFrame(tuples)
-    df.columns = ['customer_id', 'article_id']
+    df.columns = ["customer_id", "article_id"]
     cdf = to_cdf(df)
     cdf = cdf.drop_duplicates().reset_index(drop=True)
     return cdf
@@ -50,11 +51,12 @@ def create_nmslib_index(
     nmslib_index.setQueryTimeParams(query_time_params)
     return nmslib_index, keys
 
-class AbstractCGBlock:
-    def fit(self, input_df: pd.DataFrame, y=None):
-        return self.transform(input_df)
 
-    def transform(self, input_df: pd.DataFrame):
+class AbstractCGBlock:
+    def fit(self, input_cdf: cudf.DataFrame, y=None) -> Dict[int, List[int]]:
+        return self.transform(input_cdf)
+
+    def transform(self, input_cdf: cudf.DataFrame) -> Dict[int, List[int]]:
         raise NotImplementedError()
 
     def get_cudf(self):
@@ -63,8 +65,8 @@ class AbstractCGBlock:
 
 class ArticlesSimilartoThoseUsersHavePurchased(AbstractCGBlock):
     """
-        transactionとアイテムのエンべディングを使って、
-        ユーザが過去の購入商品と似ている商品を取得する
+    transactionとアイテムのエンべディングを使って、
+    ユーザが過去の購入商品と似ている商品を取得する
     """
 
     def __init__(
@@ -73,15 +75,16 @@ class ArticlesSimilartoThoseUsersHavePurchased(AbstractCGBlock):
         max_neighbors: int,
         k_neighbors: int,
         target_articles: List[int],
-        target_customers: List[int]
-
+        target_customers: List[int],
     ) -> None:
         # NMSLib に検索対象となるベクトルを登録する
         nmslib_index, registered_article_ids = create_nmslib_index(
             vector_dict=article_emb_dict, efSearch=max_neighbors
         )
         self.nmslib_index = nmslib_index
-        self.lib_idx_2_art_id = { i: art_id for i, art_id in enumerate(registered_article_ids)}
+        self.lib_idx_2_art_id = {
+            i: art_id for i, art_id in enumerate(registered_article_ids)
+        }
         self.max_neighbors = max_neighbors
         self.k_neighbors = k_neighbors
         self.article_emb_dict = article_emb_dict
@@ -90,13 +93,10 @@ class ArticlesSimilartoThoseUsersHavePurchased(AbstractCGBlock):
 
     def transform(self, _trans_cdf):
         trans_df = _trans_cdf.to_pandas()
-        log_dict = (
-            trans_df
-            .groupby(["customer_id"])["article_id"]
-            .agg(list)
-            .to_dict()
+        log_dict = trans_df.groupby(["customer_id"])["article_id"].agg(list).to_dict()
+        self.target_customers = list(
+            set(self.target_customers) & set(list(trans_df["customer_id"].unique()))
         )
-        self.target_customers = list(set(self.target_customers) & set(list(trans_df['customer_id'].unique())))
         target_articles_set = set(self.target_articles)
         candidates_dict = {}
         for customer_id in tqdm(self.target_customers):
@@ -115,108 +115,112 @@ class ArticlesSimilartoThoseUsersHavePurchased(AbstractCGBlock):
             candidate_ids = [self.lib_idx_2_art_id[i] for i in candidate_ids]
 
             # drop duplicates & 指定したarticle_ids 以外除去 & max_neighborsでlimit
-            candidate_ids = list(set(candidate_ids)&target_articles_set)[:self.max_neighbors]
+            candidate_ids = list(set(candidate_ids) & target_articles_set)[
+                : self.max_neighbors
+            ]
             candidates_dict[customer_id] = candidate_ids
 
         return candidates_dict
-
 
 
 class LastNWeekArticles(AbstractCGBlock):
     """
     各ユーザごとに最終購買週からn週間前までの購入商品を取得する
     """
-    def __init__(
-            self,
-            key_col='customer_id',
-            item_col='article_id',
-            n_weeks=2):
+
+    def __init__(self, key_col="customer_id", item_col="article_id", n_weeks=2):
         self.key_col = key_col
         self.item_col = item_col
         self.n_weeks = n_weeks
         self.out_keys = [key_col, item_col]
 
-    def fit(self, input_df):
-        return self.transform(input_df)
+    def fit(self, input_cdf):
+        return self.transform(input_cdf)
 
-    def transform(self, _input_df):
-        input_df = _input_df.copy()
+    def transform(self, _input_cdf):
+        input_cdf = _input_cdf.copy()
 
-        week_df = input_df.\
-            groupby(self.key_col)['week'].max()\
-            .reset_index().\
-            rename({'week': 'max_week'}, axis=1) #ユーザごとに最後に買った週を取得
+        week_df = (
+            input_cdf.groupby(self.key_col)["week"]
+            .max()
+            .reset_index()
+            .rename({"week": "max_week"}, axis=1)
+        )  # ユーザごとに最後に買った週を取得
 
-        input_df = input_df.merge(week_df, on=self.key_col, how='left')
-        input_df['diff_week'] = input_df['max_week'] - input_df['week'] #各商品とユーザの最終購入週の差分
-        self.out_df = input_df.loc[input_df['diff_week']
-                                   <= self.n_weeks, self.out_keys].to_pandas() #差分がn週間以内のものを取得
+        input_cdf = input_cdf.merge(week_df, on=self.key_col, how="left")
+        input_cdf["diff_week"] = (
+            input_cdf["max_week"] - input_cdf["week"]
+        )  # 各商品とユーザの最終購入週の差分
+        self.out_df = input_cdf.loc[
+            input_cdf["diff_week"] <= self.n_weeks, self.out_keys
+        ].to_pandas()  # 差分がn週間以内のものを取得
 
-        out_dic = self.out_df.groupby(self.key_col)[
-            self.item_col].apply(list).to_dict() #ユーザごとに購入商品をリストに変換
+        out_dic = (
+            self.out_df.groupby(self.key_col)[self.item_col].apply(list).to_dict()
+        )  # ユーザごとに購入商品をリストに変換
         return out_dic
 
 
-
 class BoughtItemsAtInferencePhase(AbstractCGBlock):
-    '''
+    """
     推論期間に購入した商品をCandidateとして返す
     (リークだが、正例を増やす最も手っ取り早い方法)
 
-    '''
+    """
+
     def __init__(
-            self,
-            y_cdf,
-            key_col='customer_id',
-            item_col='article_id',
-            ):
+        self,
+        y_cdf,
+        key_col="customer_id",
+        item_col="article_id",
+    ):
 
         self.y_cdf = y_cdf
         self.key_col = key_col
         self.item_col = item_col
 
-    def fit(self, input_df):
-        return self.transform(input_df)
+    def fit(self, input_cdf):
+        return self.transform(input_cdf)
 
-    def transform(self, _input_df):
-        out_df = self.y_cdf\
-            .to_pandas()\
-            .groupby(self.key_col)[self.item_col]\
-            .apply(list).to_dict()
+    def transform(self, _input_cdf):
+        out_df = (
+            self.y_cdf.to_pandas()
+            .groupby(self.key_col)[self.item_col]
+            .apply(list)
+            .to_dict()
+        )
 
         return out_df
 
 
 class PopularItemsoftheLastWeeks(AbstractCGBlock):
-    '''
+    """
     最終購入週の人気アイテムtopNを返す
     TODO: 最終購入数以外の商品も取得できるようにする
 
-    '''
+    """
 
     def __init__(
-            self,
-            customer_ids,
-            key_col='customer_id',
-            item_col='article_id',
-            n=12):
+        self, customer_ids, key_col="customer_id", item_col="article_id", n=12
+    ):
         self.customer_ids = customer_ids
         self.key_col = key_col
         self.item_col = item_col
         self.n = n
 
-    def fit(self, input_df):
-        return self.transform(input_df)
+    def fit(self, input_cdf):
+        return self.transform(input_cdf)
 
-    def transform(self, _input_df):
-        input_df = _input_df.copy()
+    def transform(self, _input_cdf):
+        input_cdf = _input_cdf.copy()
         pop_item_dic = {}
-        self.popular_items = input_df\
-            .loc[input_df['week'] == input_df['week'].max()][self.item_col]\
-            .value_counts()\
-            .to_pandas()\
-            .index[:self.n]\
+        self.popular_items = (
+            input_cdf.loc[input_cdf["week"] == input_cdf["week"].max()][self.item_col]
+            .value_counts()
+            .to_pandas()
+            .index[: self.n]
             .values
+        )
 
         for cust_id in self.customer_ids:
             pop_item_dic[cust_id] = list(self.popular_items)
