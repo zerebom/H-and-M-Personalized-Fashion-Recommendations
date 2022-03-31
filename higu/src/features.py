@@ -5,10 +5,10 @@ to_cdf = cudf.DataFrame.from_pandas
 
 
 class AbstractBaseBlock:
-    def fit(self, input_df: pd.DataFrame, y=None):
-        return self.transform(input_df)
+    def fit(self, input_cdf: cudf.DataFrame, y=None) -> cudf.DataFrame:
+        return self.transform(input_cdf)
 
-    def transform(self, input_df: pd.DataFrame):
+    def transform(self, input_cdf: cudf.DataFrame) -> cudf.DataFrame:
         raise NotImplementedError()
 
 
@@ -21,67 +21,54 @@ class EmbBlock(AbstractBaseBlock):
         self.key_col = key_col
         self.emb_dic = emb_dic
 
-    def transform(self, input_df: pd.DataFrame):
-        _ = input_df  # input_dfはinterfaceを揃えるためだけに呼ばれてる(悲しいね)
+    def transform(self, input_cdf: cudf.DataFrame):
+        _ = input_cdf  # input_cdfはinterfaceを揃えるためだけに呼ばれてる(悲しいね)
 
-        out_df = cudf.DataFrame(self.emb_dic).T
-        out_df.columns = [f'{col}_emb' for col in out_df.columns]
-        out_df = out_df.reset_index().rename({'index': self.key_col}, axis=1)
-        out_df = out_df.iloc[:,:11]
+        out_cdf = cudf.DataFrame(self.emb_dic).T
+        out_cdf.columns = [f"{col}_emb" for col in out_cdf.columns]
+        out_cdf = out_cdf.reset_index().rename({"index": self.key_col}, axis=1)
+        out_cdf = out_cdf.iloc[:, :11]
 
-        return out_df
+        return out_cdf
 
 
 class TargetEncodingBlock(AbstractBaseBlock):
-    def __init__(self,
-                 key_col,
-                 target_col,
-                 agg_list):
+    def __init__(self, key_col, target_col, agg_list):
 
         self.key_col = key_col
         self.target_col = target_col
         self.agg_list = agg_list
 
-    def transform(self, input_df: pd.DataFrame):
-        out_df = input_df.groupby(
-            self.key_col)[
-            self.target_col].agg(
-            self.agg_list)
-        out_df.columns = ['_'.join([self.target_col, col])
-                          for col in out_df.columns]
+    def transform(self, input_cdf: cudf.DataFrame):
+        out_cdf = input_cdf.groupby(self.key_col)[self.target_col].agg(self.agg_list)
+        out_cdf.columns = ["_".join([self.target_col, col]) for col in out_cdf.columns]
 
-        out_df.reset_index(inplace=True)
+        out_cdf.reset_index(inplace=True)
 
-        return out_df
+        return out_cdf
 
 
 class TargetRollingBlock(TargetEncodingBlock):
-    def __init__(self,
-                 key_cols,
-                 group_col,
-                 target_col,
-                 agg_list,
-                 windows):
+    def __init__(self, key_cols, group_col, target_col, agg_list, windows):
 
         super().__init__(key_cols, target_col, agg_list)
         self.windows = windows
         self.group_col = group_col
 
-    def transform(self, input_df: pd.DataFrame):
-        out_df = input_df[self.key_col].copy()
+    def transform(self, input_cdf: cudf.DataFrame):
+        out_cdf = input_cdf[self.key_col].copy()
         for window in self.windows:
             for agg_func in self.agg_list:
-                col = f'{self.target_col}_{window}_rolling_{agg_func}'
-                out_df[col] = input_df.groupby(
-                    self.group_col)[
-                    self.target_col].rolling(
-                    window,
-                    center=False,
-                    min_periods=1).apply(agg_func).reset_index(0)[
-                    self.target_col]
+                col = f"{self.target_col}_{window}_rolling_{agg_func}"
+                out_cdf[col] = (
+                    input_cdf.groupby(self.group_col)[self.target_col]
+                    .rolling(window, center=False, min_periods=1)
+                    .apply(agg_func)
+                    .reset_index(0)[self.target_col]
+                )
 
-        out_df.reset_index(inplace=True, drop=True)
-        return out_df
+        out_cdf.reset_index(inplace=True, drop=True)
+        return out_cdf
 
 
 class ModeCategoryBlock(AbstractBaseBlock):
@@ -90,17 +77,20 @@ class ModeCategoryBlock(AbstractBaseBlock):
         self.key_col = key_col
         self.target_col = target_col
 
-    def fit(self, input_df):
-        return self.transform(input_df)
+    def fit(self, input_cdf):
+        return self.transform(input_cdf)
 
-    def transform(self, input_df: pd.DataFrame):
+    def transform(self, input_cdf: cudf.DataFrame):
         col_name = "most_cat_" + self.target_col
-        out_df = input_df.groupby([self.key_col, self.target_col])\
-            .size()\
-            .reset_index()\
-            .sort_values([self.key_col, 0], ascending=False)\
-            .groupby(self.key_col)[self.target_col]\
-            .nth(1).\
-            reset_index().rename({self.target_col: col_name}, axis=1)
-        out_df[col_name] = out_df[col_name].astype('category')
-        return out_df  # %%
+        out_cdf = (
+            input_cdf.groupby([self.key_col, self.target_col])
+            .size()
+            .reset_index()
+            .sort_values([self.key_col, 0], ascending=False)
+            .groupby(self.key_col)[self.target_col]
+            .nth(1)
+            .reset_index()
+            .rename({self.target_col: col_name}, axis=1)
+        )
+        out_cdf[col_name] = out_cdf[col_name].astype("category")
+        return out_cdf  # %%
