@@ -42,7 +42,7 @@ if True:
     )
 
 
-root_dir = Path("/home/kokoro/h_and_m/higu")
+root_dir = Path("../../")
 input_dir = root_dir / "input"
 exp_name = Path(os.path.basename(__file__)).stem
 output_dir = root_dir / "output" / exp_name
@@ -94,15 +94,16 @@ purchase_user_ids = (
 datetime_dic = {
     "X": {
         "train": {"start_date": phase_date(35), "end_date": phase_date(14)},
-        "valid": {"start_date": phase_date(28), "end_date": phase_date(7)},
+        "valid_model": {"start_date": phase_date(28), "end_date": phase_date(7)},
+        "valid_cv": {"start_date": phase_date(28), "end_date": phase_date(7)},
         "test": {"start_date": phase_date(21), "end_date": phase_date(0)},
     },
     "y": {
         "train": {"start_date": phase_date(14), "end_date": phase_date(7)},
-        "valid": {"start_date": phase_date(7), "end_date": phase_date(0)},
-    },
+        "valid_model": {"start_date": phase_date(7), "end_date": phase_date(0)},
+        "valid_cv": {"start_date": phase_date(7), "end_date": phase_date(0)},
+    }
 }
-
 # ================================= preprocessor =========================
 
 
@@ -124,17 +125,35 @@ def clip_transactions(
 
 # ------------------------------blocks&params----------------------------------
 
+"""
 candidate_blocks = [
     # *[PopularItemsoftheLastWeeks(customer_ids)],
     *[LastNWeekArticles(n_weeks=2)],
-    # *[ArticlesSimilartoThoseUsersHavePurchased(
-    #         article_emb_dic,
-    #         50,
-    #         10,
-    #         target_articles,
-    #         purchase_user_ids,
-    # )],
+
+    *[ArticlesSimilartoThoseUsersHavePurchased(
+            article_emb_dic,
+            50,
+            10,
+            target_articles,
+            purchase_user_ids,
+    )],
+
 ]
+"""
+
+candidate_blocks = {}
+
+phases = ['train', 'valid_model', 'valid_cv', 'test']
+for phase in phases:
+    candidate_blocks[phase] = [
+        #*[PopularItemsoftheLastWeeks(customer_ids)],
+        *[LastNWeekArticles(n_weeks=2)]
+    ]
+
+    if phase == 'train' or phase == 'valid_model':
+        candidate_blocks[phase].append(BoughtItemsAtInferencePhase(make_y_cdf(trans_cdf, datetime_dic['y'][phase]['start_date'], datetime_dic['y'][phase]['end_date'])))
+
+
 
 agg_list = ["mean", "max", "min", "std", "median"]
 feature_blocks = [
@@ -362,14 +381,14 @@ def train_lgb(
 # ==============================================================================
 
 # データの作成
-phases = ["train", "valid", "test"]
+phases = ['train','valid_model','valid_cv' ,'test']
 data_dic = {}
 
 for phase in phases:
     data_dic[phase] = {}
 
     key, X, y = make_trainable_data(
-        candidate_blocks, feature_blocks, trans_cdf, art_cdf, cust_cdf, phase=phase
+        candidate_blocks[phase], feature_blocks, trans_cdf, art_cdf, cust_cdf, phase=phase
     )
 
     data_dic[phase]["key"] = key
@@ -388,9 +407,17 @@ if not DRY_RUN:
                 pass
 
 #%%
+# データ数確認
+print('============')
+print(f"train \n{data_dic['train']['y'].value_counts()}")
+print(f"valid_model\n{data_dic['valid_model']['y'].value_counts()}")
+print(f"valid_cv\n{data_dic['valid_cv']['y'].value_counts()}\n")
+print(f"CGの正例抽出率 ( CG中の正例/validの正例 ): {data_dic['valid_cv']['y'].value_counts()[1]/data_dic['valid_model']['y'].value_counts()[1]}")
+print('============')
 
+#%%
 # 中間生成物の読み込み
-phases = ["train", "valid", "test"]
+phases = ['train','valid_model','valid_cv' ,'test']
 data_dic = {}
 for phase in phases:
     data_dic[phase] = {}
@@ -406,8 +433,8 @@ for phase in phases:
 clf, val_pred = train_lgb(
     data_dic["train"]["X"],
     data_dic["train"]["y"],
-    data_dic["valid"]["X"],
-    data_dic["valid"]["y"],
+    data_dic['valid_model']["X"],
+    data_dic['valid_model']["y"],
     param,
     logger,
     early_stop_round=100,
@@ -417,17 +444,26 @@ clf, val_pred = train_lgb(
 # %%
 
 # 推論の作成
-valid_key = data_dic["valid"]["key"]
-test_key = data_dic["test"]["key"]
-valid_y = data_dic["valid"]["y"]
-test_X = data_dic["test"]["X"]
+valid_model_key = data_dic['valid_model']['key']
+valid_cv_key = data_dic['valid_cv']['key']
+test_key = data_dic['test']['key']
 
-valid_key["pred"] = val_pred
-valid_key["target"] = valid_y
-valid_key["pred"].plot.hist()
+valid_model_y = data_dic['valid_model']['y']
+valid_cv_y = data_dic['valid_cv']['y']
 
-test_y = clf.predict_proba(test_X)[:, 1]
-test_key["pred"] = test_y
+valid_cv_X = data_dic['valid_cv']['X']
+test_X = data_dic['test']['X']
+
+valid_model_key['pred'] = val_pred
+valid_model_key['target'] = valid_model_y
+valid_model_key['pred'].plot.hist()
+
+pred_valid_cv_y = clf.predict_proba(valid_cv_X)[:, 1]
+valid_cv_key['pred'] =  pred_valid_cv_y
+valid_cv_key['target'] = valid_cv_y
+
+pred_test_y = clf.predict_proba(test_X)[:, 1]
+test_key['pred'] = pred_test_y
 
 #%%
 lgbm_path = output_dir / "lgbm.pickle"
@@ -450,7 +486,7 @@ def fill_pop_items(pred_ids: ArtIds, pop_items: ArtIds) -> ArtIds:
 
 
 # 推論を提出形式に変換
-val_sub_fmt_df = squeeze_pred_df_to_submit_format(valid_key)
+val_sub_fmt_df = squeeze_pred_df_to_submit_format(valid_cv_key)
 
 # 人気アイテムで埋める
 pop_items = get_pop_items(trans_cdf)
