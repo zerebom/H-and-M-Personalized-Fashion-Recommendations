@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import cudf
 import nmslib
@@ -53,14 +53,59 @@ def create_nmslib_index(
 
 
 class AbstractCGBlock:
-    def fit(self, input_cdf: cudf.DataFrame, y=None) -> Dict[int, List[int]]:
-        return self.transform(input_cdf)
+    def fit(
+        self, input_cdf: cudf.DataFrame, logger, y_cdf: Optional[cudf.DataFrame] = None
+    ) -> Dict[int, List[int]]:
+
+        out_dic = self.transform(input_cdf)
+        self.inspect(y_cdf, logger)
+
+        return out_dic
 
     def transform(self, input_cdf: cudf.DataFrame) -> Dict[int, List[int]]:
+        '''
+        以下の処理を書いてください
+        1. input_cdf を加工して、[customer_id,article_id]ペアをレコードにもつself.out_cdf に格納する
+        2. self.out_cdfに self.cdf2dicに渡して[customer_id,List[article_id]]を持つ辞書形式にする
+
+        y_cdf,self.out_cdfがある時、inspectが走ります。
+        '''
+
         raise NotImplementedError()
 
-    def get_cudf(self):
-        return to_cdf(self.out_df)
+    def inspect(self, y_cdf, logger):
+        if hasattr(self, "out_cdf") and y_cdf is not None:
+            customer_cnt = self.out_cdf["customer_id"].nunique()
+            article_cnt = self.out_cdf["article_id"].nunique()
+            merged_cdf = self.out_cdf.merge(
+                y_cdf, on=["customer_id", "article_id"], how="inner"
+            )
+            all_pos_cnt = len(y_cdf)
+
+            pos_in_cg_cnt = len(merged_cdf)
+            candidate_cnt = len(self.out_cdf)
+
+            pos_ratio = round(pos_in_cg_cnt / candidate_cnt, 3)
+            pos_coverage = round(pos_in_cg_cnt / all_pos_cnt, 3)
+
+            # 候補集合数・候補集合内の正例数・候補集合内の正例率・正例カバレッジ率
+            logger.info(
+                f"candidate_cnt:{candidate_cnt}, pos_in_cg_cnt: {pos_in_cg_cnt}, pos_in_cg_ratio:{pos_ratio}, pos_coverage:{pos_coverage}"
+            )
+            logger.info(
+                f"customer_uniques: {customer_cnt}, article_uniques: {article_cnt}"
+            )
+        else:
+            logger.info(
+                "either y_cdf or out_cdf isn't defined. so skip cg block inspection."
+            )
+
+    @staticmethod
+    def cdf2dic(cdf, key_col, item_col):
+        out_dic = (
+            cdf.to_pandas().groupby(key_col)[item_col].apply(list).to_dict()
+        )  # ユーザごとに商品をリストに変換
+        return out_dic
 
 
 class ArticlesSimilartoThoseUsersHavePurchased(AbstractCGBlock):
@@ -134,9 +179,6 @@ class LastNWeekArticles(AbstractCGBlock):
         self.n_weeks = n_weeks
         self.out_keys = [key_col, item_col]
 
-    def fit(self, input_cdf):
-        return self.transform(input_cdf)
-
     def transform(self, _input_cdf):
         input_cdf = _input_cdf.copy()
 
@@ -151,13 +193,11 @@ class LastNWeekArticles(AbstractCGBlock):
         input_cdf["diff_week"] = (
             input_cdf["max_week"] - input_cdf["week"]
         )  # 各商品とユーザの最終購入週の差分
-        self.out_df = input_cdf.loc[
+        self.out_cdf = input_cdf.loc[
             input_cdf["diff_week"] <= self.n_weeks, self.out_keys
-        ].to_pandas()  # 差分がn週間以内のものを取得
+        ]  # 差分がn週間以内のものを取得
 
-        out_dic = (
-            self.out_df.groupby(self.key_col)[self.item_col].apply(list).to_dict()
-        )  # ユーザごとに購入商品をリストに変換
+        out_dic = self.cdf2dic(self.out_cdf, self.key_col, self.item_col)
         return out_dic
 
 
@@ -179,18 +219,11 @@ class BoughtItemsAtInferencePhase(AbstractCGBlock):
         self.key_col = key_col
         self.item_col = item_col
 
-    def fit(self, input_cdf):
-        return self.transform(input_cdf)
-
     def transform(self, _input_cdf):
-        out_df = (
-            self.y_cdf.to_pandas()
-            .groupby(self.key_col)[self.item_col]
-            .apply(list)
-            .to_dict()
-        )
+        self.out_cdf = self.y_cdf.copy()
+        out_dic = self.cdf2dic(self.out_cdf, self.key_col, self.item_col)
 
-        return out_df
+        return out_dic
 
 
 class PopularItemsoftheLastWeeks(AbstractCGBlock):
@@ -207,9 +240,6 @@ class PopularItemsoftheLastWeeks(AbstractCGBlock):
         self.key_col = key_col
         self.item_col = item_col
         self.n = n
-
-    def fit(self, input_cdf):
-        return self.transform(input_cdf)
 
     def transform(self, _input_cdf):
         input_cdf = _input_cdf.copy()
