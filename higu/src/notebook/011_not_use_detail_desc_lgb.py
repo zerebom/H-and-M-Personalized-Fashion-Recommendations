@@ -277,25 +277,32 @@ def make_trainable_data(
     logger.info(f"make {phase} start.")
 
     key_cols = ["customer_id", "article_id"]
-    y_cdf, y_df, y = None, None, None
+    if phase is not "test":
+        y_start_date = datetime_dic["y"][phase]["start_date"]
+        y_end_date = datetime_dic["y"][phase]["end_date"]
+        logger.info(f"y_start_date: {y_start_date} ~ y_end_date: {y_end_date}")
+        y_cdf = make_y_cdf(raw_trans_cdf, y_start_date, y_end_date)
+        y_df = y_cdf.to_pandas()
+    else:
+        y_df, y_cdf = None, None
 
     # 学習するtransaction期間を絞る
-    trans_cdf = clip_transactions(raw_trans_cdf, X_end_date)
+    cliped_trans_cdf = clip_transactions(raw_trans_cdf, X_end_date)
     x_start_date, x_end_date = (
-        trans_cdf["t_dat"].min().astype("datetime64[D]"),
-        trans_cdf["t_dat"].max().astype("datetime64[D]"),
+        cliped_trans_cdf["t_dat"].min().astype("datetime64[D]"),
+        cliped_trans_cdf["t_dat"].max().astype("datetime64[D]"),
     )
     logger.info(f"x_start_date: {x_start_date} ~ x_end_date: {x_end_date}")
 
     # Xの作成
     logger.info("start candidate generation")  # CG
     candidates_df = candidate_generation(
-        candidate_blocks, trans_cdf, art_cdf, cust_cdf, y_cdf
+        candidate_blocks, cliped_trans_cdf, art_cdf, cust_cdf, y_cdf
     )
 
     logger.info("start feature generation")  # FE
     art_feat_df, cust_feat_df = feature_generation(
-        feature_blocks, trans_cdf, art_cdf, cust_cdf
+        feature_blocks, cliped_trans_cdf, art_cdf, cust_cdf
     )
 
     # 予測対象ペアに特徴量をmergeする
@@ -305,7 +312,7 @@ def make_trainable_data(
 
     # 最近購入されてないアイテムを取り除く
     recent_items = (
-        trans_cdf.groupby("article_id")["week"]
+        cliped_trans_cdf.groupby("article_id")["week"]
         .max()
         .reset_index()
         .query("week>96")
@@ -318,15 +325,16 @@ def make_trainable_data(
 
     # yの作成
     if phase is not "test":
-        y_start_date = datetime_dic["y"][phase]["start_date"]
-        y_end_date = datetime_dic["y"][phase]["end_date"]
-        logger.info(f"y_start_date: {y_start_date} ~ y_end_date: {y_end_date}")
-        y_df = make_y_cdf(raw_trans_cdf, y_start_date, y_end_date).to_pandas()
         y = X.merge(y_df, how="left", on=key_cols)["purchased"].fillna(0).astype(int)
-        logger.info(f"X_shape:, {X.shape}, y_mean: {y.mean()}")
+        logger.info(f"{phase}_y contains: {str(y.value_counts().to_dict())}")
+        true_ratio = round(100 * y.mean(), 3)
+        logger.info(f"{phase}_y`s true_ratio:{true_ratio}%")
+    else:
+        y = None
 
+    logger.info(f"{phase}_X_shape:, {X.shape}")
     logger.info(
-        f"X contains n_of_customers: {X['customer_id'].nunique()}, n_of_articles: {X['article_id'].nunique()}"
+        f"phase_X contains n_of_customers: {X['customer_id'].nunique()}, n_of_articles: {X['article_id'].nunique()}"
     )
     # keyの作成
     key_df = X[key_cols]
