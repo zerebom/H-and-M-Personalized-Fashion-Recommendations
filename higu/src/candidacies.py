@@ -35,12 +35,32 @@ def create_nmslib_index(
     efConstruction: int = 300,  # efConstruction の値を大きくするほど検索精度が向上するが、インデックス作成時間が伸びる
     M: int = 60,  # M の値をある程度まで大きくすると、再現性が向上して検索時間が短くなるが、インデックス作成時間が伸びる (5 ~ 100 が妥当な範囲)
 ) -> Tuple[Any, List[Any]]:
+    """
+    近似を探訪する
+
+    Args:
+        vector_dict (Dict[Any, np.ndarray]): _description_
+        efSearch (int): _description_
+        method (str, optional): _description_. Defaults to "hnsw".
+        space (str, optional): _description_. Defaults to "cosinesimil".
+        post (int, optional): _description_. Defaults to 2.
+        efConstruction (int, optional): _description_. Defaults to 300.
+
+    Returns:
+        Tuple[Any, List[Any]]: _description_
+    """
     print("train NMSLib")
+    # initialize a new index
     nmslib_index = nmslib.init(method=method, space=space)
+
+    # matixで渡さないといけない
     embs = np.stack(list(vector_dict.values()))
     keys = list(vector_dict.keys())
+
+    # データを渡す 
     nmslib_index.addDataPointBatch(embs)
 
+    # ここなにしてるんだ、、？
     index_time_params = {"M": M, "efConstruction": efConstruction, "post": post}
     nmslib_index.createIndex(index_time_params, print_progress=True)
 
@@ -48,6 +68,8 @@ def create_nmslib_index(
     # https://github.com/nmslib/nmslib/issues/172#issuecomment-281376808
     # max(k, efSearch) を設定すると良いらしい
     query_time_params = {"efSearch": efSearch}
+
+    # ここで探す(？)
     nmslib_index.setQueryTimeParams(query_time_params)
     return nmslib_index, keys
 
@@ -58,6 +80,7 @@ class AbstractCGBlock:
     ) -> Dict[int, List[int]]:
 
         out_dic = self.transform(input_cdf)
+        # inspect走るようにしてる
         self.inspect(y_cdf, logger)
 
         return out_dic
@@ -137,12 +160,20 @@ class ArticlesSimilartoThoseUsersHavePurchased(AbstractCGBlock):
         self.target_customers = target_customers
 
     def transform(self, _trans_cdf):
+        # 絞られた期間のtrans_dfを取得する
         trans_df = _trans_cdf.to_pandas()
+        # 過去の購買商品を出す
         log_dict = trans_df.groupby(["customer_id"])["article_id"].agg(list).to_dict()
+
+        # 対象となるユーザー + 絞られた期間に購買したユーザー
         self.target_customers = list(
             set(self.target_customers) & set(list(trans_df["customer_id"].unique()))
         )
+
+        # 対象商品を取得する
         target_articles_set = set(self.target_articles)
+
+
         candidates_dict = {}
         for customer_id in tqdm(self.target_customers):
             customer_bought_article_ids = log_dict[customer_id]
@@ -171,7 +202,7 @@ class ArticlesSimilartoThoseUsersHavePurchased(AbstractCGBlock):
 
 class LastNWeekArticles(AbstractCGBlock):
     """
-    各ユーザごとに最終購買週からn週間前までの購入商品を取得する
+    各ユーザごとに最終購買週からn週間前までに他の人が購入した購入商品を取得
     """
 
     def __init__(self, key_col="customer_id", item_col="article_id", n_weeks=2):
@@ -190,6 +221,7 @@ class LastNWeekArticles(AbstractCGBlock):
             .rename({"week": "max_week"}, axis=1)
         )  # ユーザごとに最後に買った週を取得
 
+        # ここがclipの期間になってる？
         input_cdf = input_cdf.merge(week_df, on=self.key_col, how="left")
         input_cdf["diff_week"] = (
             input_cdf["max_week"] - input_cdf["week"]
@@ -197,6 +229,37 @@ class LastNWeekArticles(AbstractCGBlock):
         self.out_cdf = input_cdf.loc[
             input_cdf["diff_week"] <= self.n_weeks, self.out_keys
         ]  # 差分がn週間以内のものを取得
+
+        out_dic = self.cdf2dic(self.out_cdf, self.key_col, self.item_col)
+        return out_dic
+
+class LastWeekPopularArticles(AbstractCGBlock):
+    """
+    各ユーザごとに最終購買週の人気商品を返す
+    """
+
+    def __init__(self, key_col="customer_id", item_col="article_id"):
+        self.key_col = key_col
+        self.item_col = item_col
+        self.out_keys = [key_col, item_col]
+
+    def transform(self, _input_cdf):
+        input_cdf = _input_cdf.copy()
+
+        week_df = (
+            input_cdf.groupby(self.key_col)["t_dat"]
+            .max()
+            .reset_index()
+            .rename({"t_dat": "max_t_dat"}, axis=1)
+        )  # ユーザごとに最後に買った日を取得
+
+        input_cdf = input_cdf.merge(week_df, on=self.key_col, how="left")
+        input_cdf["diff_day"] = (
+            input_cdf["max_t_dat"] - input_cdf["t_dat"]
+        )  # 各商品とユーザの最終購入週の差分
+        self.out_cdf = input_cdf.loc[
+            input_cdf["diff_day"] <= 0, self.out_keys
+        ]  # 差分が0日以内のものを取得
 
         out_dic = self.cdf2dic(self.out_cdf, self.key_col, self.item_col)
         return out_dic
