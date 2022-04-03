@@ -204,20 +204,17 @@ def candidate_generation(blocks, trans_cdf, art_cdf, cust_cdf, y_cdf) -> pd.Data
     (art_id, cust_id)をkeyに持つdataframeを返す。
     """
 
-    customer_ids = list(cust_cdf["customer_id"].to_pandas().unique())
-
-    if y_cdf is not None:
-        blocks.append(BoughtItemsAtInferencePhase(y_cdf))
-
+    # if y_cdf is not None:
+    #     blocks.append(BoughtItemsAtInferencePhase(y_cdf))
     candidates_dict = {}
     candidates_df = None
 
     for i, block in enumerate(blocks):
-        with timer(logger=logger, prefix="fit {} ".format(block.__class__.__name__)):
+        with timer(logger=logger, prefix="↑fitted {} ".format(block.__class__.__name__)):
             if i == 0:
-                candidates_dict = block.fit(trans_cdf)
+                candidates_dict = block.fit(trans_cdf, logger, y_cdf)
             else:
-                new_dic = block.fit(trans_cdf)
+                new_dic = block.fit(trans_cdf, logger, y_cdf)
                 for key, value in candidates_dict.items():
                     if key in new_dic:
                         value.extend(new_dic[key])
