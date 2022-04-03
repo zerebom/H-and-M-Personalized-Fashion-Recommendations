@@ -181,7 +181,7 @@ for art_id, emb_vec in zip(art_df['article_id'].values,decomp_emb):
     emb_dic[int(art_id)] = list(emb_vec.astype(float))
 
 #%%
-with open(str(input_dir / 'emb/customer_emb.json'), 'w') as f:
+with open(str(input_dir / 'emb/article_emb.json'), 'w') as f:
     json.dump(emb_dic, f, indent=4)
 
 # %%
