@@ -447,7 +447,6 @@ with open(lgbm_path, "wb") as f:
 
 
 #%%
-
 def get_pop_items(trans_cdf):
     pop = PopularItemsoftheLastWeeks([1])
     pop.fit(trans_cdf)
@@ -461,7 +460,9 @@ def fill_pop_items(pred_ids: ArtIds, pop_items: ArtIds) -> ArtIds:
 
 
 # 人気アイテムで埋める
-val_cliped_trans_cdf = clip_transactions(trans_cdf, datetime_dic['X']['valid']['end_date'])
+val_cliped_trans_cdf = clip_transactions(
+    trans_cdf, datetime_dic["X"]["valid"]["end_date"]
+)
 val_pop_items = get_pop_items(val_cliped_trans_cdf)
 test_pop_items = get_pop_items(trans_cdf)
 
