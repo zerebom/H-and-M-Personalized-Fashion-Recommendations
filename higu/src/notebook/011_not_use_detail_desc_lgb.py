@@ -376,13 +376,17 @@ for phase in phases:
     data_dic[phase] = {}
 
     key, X, y = make_trainable_data(
-        candidate_blocks, feature_blocks, trans_cdf, art_cdf, cust_cdf, phase=phase
+        candidate_blocks,
+        feature_blocks,
+        raw_trans_cdf,
+        raw_art_cdf,
+        raw_cust_cdf,
+        phase=phase,
     )
 
     data_dic[phase]["key"] = key
     data_dic[phase]["X"] = X
     data_dic[phase]["y"] = y
-
 
 #%%
 # 中間生成物の保存
