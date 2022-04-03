@@ -204,7 +204,7 @@ def squeeze_pred_df_to_submit_format(pred_df:pd.DataFrame, fill_logic=None, args
         submit_format_df["target"] = (pred_df[pred_df['target'] == 1]
         .groupby('customer_id')['article_id']
         .apply(list)
-        .apply(fill_logic)
+        .apply(fill_logic, args=args)
         .apply(arts_id_list2str)
         )
 
