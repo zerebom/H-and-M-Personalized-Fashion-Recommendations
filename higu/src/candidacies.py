@@ -164,6 +164,7 @@ class ArticlesSimilartoThoseUsersHavePurchased(AbstractCGBlock):
                 : self.max_neighbors
             ]
             candidates_dict[customer_id] = candidate_ids
+            # TODO: candidates_dict→ out_cdfにする処理が書けるとinspectできます。力尽きて書いてない
 
         return candidates_dict
 
