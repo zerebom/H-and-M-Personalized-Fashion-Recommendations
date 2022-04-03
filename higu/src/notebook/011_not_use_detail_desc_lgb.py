@@ -66,12 +66,14 @@ CustIds = List[CustId]
 # ==================================================================================
 # ================================= データのロード =================================
 # ==================================================================================
-trans_cdf, cust_cdf, art_cdf = read_cdf(input_dir, DRY_RUN)
+raw_trans_cdf, raw_cust_cdf, raw_art_cdf = read_cdf(input_dir, DRY_RUN)
 
 with open(str(input_dir / "emb/article_emb.json")) as f:
     article_emb_dic = json.load(f, object_hook=jsonKeys2int)
 
-target_articles = trans_cdf.query("week>=95")["article_id"].unique().to_pandas().values
+target_articles = (
+    raw_trans_cdf.query("week>=95")["article_id"].unique().to_pandas().values
+)
 preds_of_not_purchase_user_cdf = cudf.read_parquet(
     input_dir / "005_preds_of_not_purchase_user.parquet"
 )
