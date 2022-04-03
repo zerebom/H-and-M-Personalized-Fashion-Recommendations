@@ -246,7 +246,7 @@ def feature_generation(blocks, trans_cdf, art_cdf, cust_cdf) -> pd.DataFrame:
     cust_feat_cdf = cust_cdf[["customer_id"]]
 
     for block in tqdm(blocks):
-        with timer(logger=logger, prefix="fit {} ".format(block)):
+        with timer(logger=logger, prefix="fit {} ".format(block.__class__.__name__)):
 
             feature_cdf = block.fit(feature_df)
 
@@ -449,43 +449,56 @@ def fill_pop_items(pred_ids: ArtIds, pop_items: ArtIds) -> ArtIds:
     return pred_ids[:12]
 
 
-# 推論を提出形式に変換
-val_sub_fmt_df = squeeze_pred_df_to_submit_format(valid_key)
-
 # 人気アイテムで埋める
-pop_items = get_pop_items(trans_cdf)
+val_cliped_trans_cdf = clip_transactions(trans_cdf, datetime_dic['X']['valid']['end_date'])
+val_pop_items = get_pop_items(val_cliped_trans_cdf)
+test_pop_items = get_pop_items(trans_cdf)
 
-#TODO: ここで、全てのtest_購入ユーザに人気アイテムを与える実装にしたい。
+
+# 推論を提出形式に変換
+# TODO: ここで、全てのtest_購入ユーザに人気アイテムを与える実装にしたい。
+val_sub_fmt_df = squeeze_pred_df_to_submit_format(
+    valid_key, fill_logic=fill_pop_items, args=(val_pop_items,)
+)
+
 test_sub_fmt_df = squeeze_pred_df_to_submit_format(
-    test_key, fill_logic=fill_pop_items, args=(pop_items,)
+    test_key, fill_logic=fill_pop_items, args=(test_pop_items,)
 )
 
 # 12桁idを文字列idに変換
-converted_sub_fmt_df = convert_sub_df_customer_id_to_str(input_dir, test_sub_fmt_df)
-
-
-# 保存
-prefix = datetime.now().strftime("%m_%d_%H_%M")
-converted_sub_fmt_df.to_csv(output_dir / f"submission_{prefix}.csv", index=False)
-
-
-# #%%
-# valid_true = pd.read_csv(input_dir/'valid_true_after0916.csv')
-# _df = val_sub_fmt_df.reset_index()
-
+val_converted_sub_fmt_df = convert_sub_df_customer_id_to_str(input_dir, val_sub_fmt_df)
+test_converted_sub_fmt_df = convert_sub_df_customer_id_to_str(
+    input_dir, test_sub_fmt_df
+)
 
 #%%
-# TODO: カエルさんのやつでmapkを測れるようにする。
-# TODO: customeridをstr,hexを行き来できるようにする。
+# Valの確認
+valid_true = pd.read_csv(input_dir / "valid_true_after0916.csv")
+valid_true = valid_true[["customer_id", "valid_true"]]
+valid_true = valid_true.merge(val_converted_sub_fmt_df, how="left", on="customer_id")
 
+#%%
 # 精度の確認
-mapk_val = mapk(
-    val_sub_fmt_df["prediction"].map(lambda x: x.split()),
-    val_sub_fmt_df["target"].map(lambda x: x.split()),
-    k=12,
+mapk_val = round(
+    mapk(
+        valid_true["valid_true"].map(lambda x: x.split()),
+        valid_true["prediction"].map(lambda x: x.split()),
+        k=12,
+    ),
+    4,
 )
 
 logger.info(f"mapk:{mapk_val}")
+
+#%%
+# 保存
+prefix = datetime.now().strftime("%m_%d_%H_%M")
+test_converted_sub_fmt_df.to_csv(
+    output_dir / f"submission_map12_{mapk_val}_{prefix}.csv", index=False
+)
+val_converted_sub_fmt_df.to_csv(
+    output_dir / f"val_converted_sub_fmt_map12_{mapk_val}_{prefix}.csv", index=False
+)
 
 # %%
 fig, ax = visualize_importance([clf], data_dic["train"]["X"])
