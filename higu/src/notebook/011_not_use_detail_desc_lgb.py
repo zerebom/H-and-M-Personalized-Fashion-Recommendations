@@ -244,7 +244,7 @@ def feature_generation(blocks, trans_cdf, art_cdf, cust_cdf) -> pd.DataFrame:
     art_feat_cdf = art_cdf[["article_id"]]
     cust_feat_cdf = cust_cdf[["customer_id"]]
 
-    for block in tqdm(blocks):
+    for block in blocks:
         with timer(logger=logger, prefix="fit {} ".format(block.__class__.__name__)):
 
             feature_cdf = block.fit(feature_df)
