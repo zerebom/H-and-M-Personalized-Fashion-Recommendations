@@ -154,7 +154,7 @@ for phase in phases:
     ]
 
     if phase == 'train' or phase == 'valid_model':
-        candidate_blocks[phase].append(BoughtItemsAtInferencePhase(make_y_cdf(trans_cdf, datetime_dic['y'][phase]['start_date'], datetime_dic['y'][phase]['end_date'])))
+        candidate_blocks[phase].append(BoughtItemsAtInferencePhase(make_y_cdf(raw_trans_cdf, datetime_dic['y'][phase]['start_date'], datetime_dic['y'][phase]['end_date'])))
 
 
 
