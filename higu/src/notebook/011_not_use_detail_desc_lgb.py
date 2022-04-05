@@ -406,14 +406,6 @@ if not DRY_RUN:
             except:
                 pass
 
-#%%
-# データ数確認
-print('============')
-print(f"train \n{data_dic['train']['y'].value_counts()}")
-print(f"valid_model\n{data_dic['valid_model']['y'].value_counts()}")
-print(f"valid_cv\n{data_dic['valid_cv']['y'].value_counts()}\n")
-print(f"CGの正例抽出率 ( CG中の正例/validの正例 ): {data_dic['valid_cv']['y'].value_counts()[1]/data_dic['valid_model']['y'].value_counts()[1]}")
-print('============')
 
 #%%
 # 中間生成物の読み込み
