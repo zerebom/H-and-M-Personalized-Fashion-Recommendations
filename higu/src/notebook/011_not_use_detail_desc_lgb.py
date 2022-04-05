@@ -68,6 +68,7 @@ CustIds = List[CustId]
 # ==================================================================================
 raw_trans_cdf, raw_cust_cdf, raw_art_cdf = read_cdf(input_dir, DRY_RUN)
 
+# 006で作成したarticle_emb.jsonを読み込む
 with open(str(input_dir / "emb/article_emb.json")) as f:
     article_emb_dic = json.load(f, object_hook=jsonKeys2int)
 
