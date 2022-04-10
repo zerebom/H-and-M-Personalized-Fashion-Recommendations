@@ -14,7 +14,8 @@ import pandas as pd
 from tqdm import tqdm
 
 if True:
-    sys.path.append("../")
+    #sys.path.append("../")
+    sys.path.append("/content/drive/MyDrive/competition/h_and_m/higu/src/")
     from candidacies import (
         ArticlesSimilartoThoseUsersHavePurchased,
         BoughtItemsAtInferencePhase,
@@ -42,7 +43,10 @@ if True:
     )
 
 
-root_dir = Path("../../")
+# root_dir = Path("../../")
+root_dir = Path("/content/drive/MyDrive/competition/")
+#root_dir = Path(__file__).parent.parent.parent.parent.parent
+print(root_dir)
 input_dir = root_dir / "input"
 exp_name = Path(os.path.basename(__file__)).stem
 output_dir = root_dir / "output" / exp_name
