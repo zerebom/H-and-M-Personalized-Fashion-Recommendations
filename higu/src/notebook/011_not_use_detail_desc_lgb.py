@@ -306,7 +306,8 @@ def make_trainable_data(
     else:
         y_df, y_cdf = None, None
 
-    # 学習するtransaction期間を絞る
+    # 学習するtransaction期間を絞る(endだけ絞る)
+    # TODO: ここ本当はもっと絞るはず？
     cliped_trans_cdf = clip_transactions(raw_trans_cdf, X_end_date)
     x_start_date, x_end_date = (
         cliped_trans_cdf["t_dat"].min().astype("datetime64[D]"),
@@ -315,7 +316,9 @@ def make_trainable_data(
     logger.info(f"x_start_date: {x_start_date} ~ x_end_date: {x_end_date}")
 
     # Xの作成
-    logger.info("start candidate generation")  # CG
+    logger.info("start candidate generation")  
+
+    # candidate_generation(blocks, trans_cdf, art_cdf, cust_cdf, y_cdf) だから、これだと
     candidates_df = candidate_generation(
         candidate_blocks, cliped_trans_cdf, art_cdf, cust_cdf, y_cdf
     )
