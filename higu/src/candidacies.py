@@ -5,6 +5,7 @@ import nmslib
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from utils import customer_hex_id_to_int
 
 to_cdf = cudf.DataFrame.from_pandas
 
@@ -112,6 +113,7 @@ class AbstractCGBlock:
             pos_coverage = round(pos_in_cg_cnt / all_pos_cnt, 3)
 
             # 候補集合数・候補集合内の正例数・候補集合内の正例率・正例カバレッジ率
+            # pos_ratioが0.5になるのが原理上は理想(難易度高すぎで無理だけど)
             logger.info(
                 f"candidate_cnt:{candidate_cnt}, pos_in_cg_cnt: {pos_in_cg_cnt}, pos_in_cg_ratio:{pos_ratio}, pos_coverage:{pos_coverage}"
             )
@@ -233,38 +235,6 @@ class LastNWeekArticles(AbstractCGBlock):
         out_dic = self.cdf2dic(self.out_cdf, self.key_col, self.item_col)
         return out_dic
 
-class LastWeekPopularArticles(AbstractCGBlock):
-    """
-    各ユーザごとに最終購買週の人気商品を返す
-    """
-
-    def __init__(self, key_col="customer_id", item_col="article_id"):
-        self.key_col = key_col
-        self.item_col = item_col
-        self.out_keys = [key_col, item_col]
-
-    def transform(self, _input_cdf):
-        input_cdf = _input_cdf.copy()
-
-        week_df = (
-            input_cdf.groupby(self.key_col)["t_dat"]
-            .max()
-            .reset_index()
-            .rename({"t_dat": "max_t_dat"}, axis=1)
-        )  # ユーザごとに最後に買った日を取得
-
-        input_cdf = input_cdf.merge(week_df, on=self.key_col, how="left")
-        input_cdf["diff_day"] = (
-            input_cdf["max_t_dat"] - input_cdf["t_dat"]
-        )  # 各商品とユーザの最終購入週の差分
-        self.out_cdf = input_cdf.loc[
-            input_cdf["diff_day"] <= 0, self.out_keys
-        ]  # 差分が0日以内のものを取得
-
-        out_dic = self.cdf2dic(self.out_cdf, self.key_col, self.item_col)
-        return out_dic
-
-
 class BoughtItemsAtInferencePhase(AbstractCGBlock):
     """
     推論期間に購入した商品をCandidateとして返す
@@ -289,6 +259,59 @@ class BoughtItemsAtInferencePhase(AbstractCGBlock):
 
         return out_dic
 
+
+"""
+ルールベース
+"""
+class RuleBase(AbstractCGBlock):
+    """
+    ルールベース
+
+    """
+
+    def __init__(
+        self,
+        file_path,
+        target_customers,
+        key_col="customer_id",
+        item_col="article_id",
+    ):
+
+        self.target_customers = target_customers
+        self.file_path = file_path
+        self.key_col = key_col
+        self.item_col = item_col
+
+    def transform(self, _input_cdf):
+        df = cudf.read_csv(self.file_path).to_pandas()
+        tqdm.pandas()
+
+
+        df['customer_id'] = customer_hex_id_to_int(df['customer_id'])
+        df['prediction'] = df['prediction'].progress_apply(self.split)
+
+        df = df.explode('prediction').dropna().reset_index(drop=True)
+        df['prediction'] = df['prediction'].astype(int)
+        df.columns = [self.key_col,self.item_col]
+        df = df[df['customer_id'].isin(self.target_customers)]
+
+
+        self.out_cdf = to_cdf(df)
+        out_dic = self.cdf2dic(self.out_cdf, self.key_col, self.item_col)
+
+        return out_dic
+
+    @staticmethod
+    def split(x):
+        if type(x) is str:
+            return x.split(' ')
+        else:
+            return []
+
+
+""" 
+人気商品系
+"""
 
 class PopularItemsoftheLastWeeks(AbstractCGBlock):
     """
@@ -320,3 +343,35 @@ class PopularItemsoftheLastWeeks(AbstractCGBlock):
             pop_item_dic[cust_id] = list(self.popular_items)
 
         return pop_item_dic
+
+
+class LastWeekPopularArticles(AbstractCGBlock):
+    """
+    各ユーザごとに最終購買週の人気商品を返す
+    """
+
+    def __init__(self, key_col="customer_id", item_col="article_id"):
+        self.key_col = key_col
+        self.item_col = item_col
+        self.out_keys = [key_col, item_col]
+
+    def transform(self, _input_cdf):
+        input_cdf = _input_cdf.copy()
+
+        week_df = (
+            input_cdf.groupby(self.key_col)["t_dat"]
+            .max()
+            .reset_index()
+            .rename({"t_dat": "max_t_dat"}, axis=1)
+        )  # ユーザごとに最後に買った日を取得
+
+        input_cdf = input_cdf.merge(week_df, on=self.key_col, how="left")
+        input_cdf["diff_day"] = (
+            input_cdf["max_t_dat"] - input_cdf["t_dat"]
+        )  # 各商品とユーザの最終購入週の差分
+        self.out_cdf = input_cdf.loc[
+            input_cdf["diff_day"] <= 0, self.out_keys
+        ]  # 差分が0日以内のものを取得
+
+        out_dic = self.cdf2dic(self.out_cdf, self.key_col, self.item_col)
+        return out_dic
