@@ -16,38 +16,29 @@ from tqdm import tqdm
 
 # %%
 if True:
-    sys.path.append("../")
+    #sys.path.append("../")
+    sys.path.append("/content/drive/MyDrive/competition/h_and_m/higu/src/")
     from utils import (Categorize, article_id_int_to_str,
                        article_id_str_to_int, customer_hex_id_to_int,
                        reduce_mem_usage)
 
 # %%
-root_dir = Path("/home/kokoro/h_and_m/higu")
+root_dir = Path("/content/drive/MyDrive/competition/") #Path("/home/kokoro/h_and_m/higu")
 input_dir = root_dir / "input"
 output_dir = root_dir / "output"
 
 
 # %%
 # データセットの読み込み
+print("データセット読み込み")
+cust_df = cudf.read_csv(input_dir / 'customers.csv').to_pandas()
+art_df = cudf.read_csv(input_dir / 'articles.csv').to_pandas()
+art_df['article_id'] = art_df['article_id'].astype('str')
 trans_df = cudf.read_csv(input_dir /
                          "transactions_train.csv"
                          ).to_pandas()
-trans_df['article_id'] = trans_df['article_id'].astype('str')
-cust_df = cudf.read_csv(input_dir / 'customers.csv').to_pandas()
 
-art_df = cudf.read_csv(input_dir / 'articles.csv').to_pandas()
-art_df['article_id'] = art_df['article_id'].astype('str')
 
-# %%
-
-# transactionsの前処理
-trans_df['customer_id'] = customer_hex_id_to_int(trans_df['customer_id'])
-trans_df['article_id'] = article_id_str_to_int(trans_df['article_id'])
-trans_df['t_dat'] = pd.to_datetime(trans_df['t_dat'], format='%Y-%m-%d')
-trans_df['week'] = 104 - (trans_df['t_dat'].max() -
-                          trans_df['t_dat']).dt.days // 7
-
-# %%
 
 # customersの前処理
 cust_df['customer_id'] = customer_hex_id_to_int(cust_df['customer_id'])
@@ -63,8 +54,8 @@ cust_df["fashion_news_frequency"] = Categorize().fit_transform(
     cust_df[['fashion_news_frequency']])["fashion_news_frequency"]
 
 # %%
-
 # articlesの前処理
+print("articlesの前処理")
 art_df['article_id'] = article_id_str_to_int(art_df['article_id'])
 
 for col in art_df.columns:
@@ -74,9 +65,29 @@ for col in art_df.columns:
 
 # %%
 # データセットのメモリ削減
+print("データセット削減")
 trans_df = reduce_mem_usage(trans_df)
 cust_df = reduce_mem_usage(cust_df)
 art_df = reduce_mem_usage(art_df)
+
+# %%
+print("tranの処理")
+print(trans_df.head(5))
+print("str変換")
+trans_df['article_id'] = trans_df['article_id'].astype('str')
+trans_df['customer_id'] = trans_df['customer_id'].astype('str')
+print("str変換終わり")
+
+# transactionsの前処理
+trans_df['customer_id'] = customer_hex_id_to_int(trans_df['customer_id'])
+trans_df['article_id'] = article_id_str_to_int(trans_df['article_id'])
+trans_df['t_dat'] = pd.to_datetime(trans_df['t_dat'], format='%Y-%m-%d')
+trans_df['week'] = 104 - (trans_df['t_dat'].max() -
+                          trans_df['t_dat']).dt.days // 7
+print("ここで落ちてる？")
+
+
+
 
 
 # %%
@@ -126,14 +137,12 @@ pd.to_pickle(dict(val_week_purchases_by_cust),
 # %%
 
 # sample subの用意
-sample_sub = pd.read_csv(input_dir / 'sample_submission.csv')
-valid_gt = customer_hex_id_to_int(sample_sub.customer_id) \
-    .map(val_week_purchases_by_cust) \
-    .apply(lambda xx: ' '.join('0' + str(x) for x in xx))
-sample_sub.prediction = valid_gt
-sample_sub.to_parquet(
-    output_dir /
-    'validation_ground_truth.parquet',
-    index=False)
-
-# %%
+# sample_sub = pd.read_csv(input_dir / 'sample_submission.csv')
+# valid_gt = customer_hex_id_to_int(sample_sub.customer_id) \
+#     .map(val_week_purchases_by_cust) \
+#     .apply(lambda xx: ' '.join('0' + str(x) for x in xx))
+# sample_sub.prediction = valid_gt
+# sample_sub.to_parquet(
+#     output_dir /
+#     'validation_ground_truth.parquet',
+#     index=False)
