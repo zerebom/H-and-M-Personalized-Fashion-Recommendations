@@ -74,6 +74,9 @@ def create_nmslib_index(
     nmslib_index.setQueryTimeParams(query_time_params)
     return nmslib_index, keys
 
+"""" 
+抽象クラス
+"""
 
 class AbstractCGBlock:
     def fit(
@@ -132,6 +135,85 @@ class AbstractCGBlock:
         )  # ユーザごとに商品をリストに変換
         return out_dic
 
+""" 
+正例を増やす
+"""
+
+class BoughtItemsAtInferencePhase(AbstractCGBlock):
+    """
+    推論期間に購入した商品をCandidateとして返す
+    (リークだが、正例を増やす最も手っ取り早い方法)
+
+    """
+
+    def __init__(
+        self,
+        y_cdf,
+        key_col="customer_id",
+        item_col="article_id",
+    ):
+
+        self.y_cdf = y_cdf
+        self.key_col = key_col
+        self.item_col = item_col
+
+    def transform(self, _input_cdf):
+        self.out_cdf = self.y_cdf.copy()
+        out_dic = self.cdf2dic(self.out_cdf, self.key_col, self.item_col)
+
+        return out_dic
+
+
+"""
+ルールベース
+"""
+class RuleBase(AbstractCGBlock):
+    """
+    ルールベース
+
+    """
+
+    def __init__(
+        self,
+        file_path,
+        target_customers,
+        key_col="customer_id",
+        item_col="article_id",
+    ):
+
+        self.target_customers = target_customers
+        self.file_path = file_path
+        self.key_col = key_col
+        self.item_col = item_col
+
+    def transform(self, _input_cdf):
+        df = cudf.read_csv(self.file_path).to_pandas()
+        tqdm.pandas()
+
+        df['customer_id'] = customer_hex_id_to_int(df['customer_id'])
+        df['prediction'] = df['prediction'].progress_apply(self.split)
+
+        df = df.explode('prediction').dropna().reset_index(drop=True)
+        df['prediction'] = df['prediction'].astype(int)
+        df.columns = [self.key_col,self.item_col]
+        df = df[df['customer_id'].isin(self.target_customers)]
+
+        self.out_cdf = to_cdf(df)
+        out_dic = self.cdf2dic(self.out_cdf, self.key_col, self.item_col)
+
+        return out_dic
+
+    @staticmethod
+    def split(x):
+        if type(x) is str:
+            return x.split(' ')
+        else:
+            return []
+
+
+""" 
+似ている商品を取得
+"""
 
 class ArticlesSimilartoThoseUsersHavePurchased(AbstractCGBlock):
     """
@@ -235,78 +317,6 @@ class LastNWeekArticles(AbstractCGBlock):
         out_dic = self.cdf2dic(self.out_cdf, self.key_col, self.item_col)
         return out_dic
 
-class BoughtItemsAtInferencePhase(AbstractCGBlock):
-    """
-    推論期間に購入した商品をCandidateとして返す
-    (リークだが、正例を増やす最も手っ取り早い方法)
-
-    """
-
-    def __init__(
-        self,
-        y_cdf,
-        key_col="customer_id",
-        item_col="article_id",
-    ):
-
-        self.y_cdf = y_cdf
-        self.key_col = key_col
-        self.item_col = item_col
-
-    def transform(self, _input_cdf):
-        self.out_cdf = self.y_cdf.copy()
-        out_dic = self.cdf2dic(self.out_cdf, self.key_col, self.item_col)
-
-        return out_dic
-
-
-"""
-ルールベース
-"""
-class RuleBase(AbstractCGBlock):
-    """
-    ルールベース
-
-    """
-
-    def __init__(
-        self,
-        file_path,
-        target_customers,
-        key_col="customer_id",
-        item_col="article_id",
-    ):
-
-        self.target_customers = target_customers
-        self.file_path = file_path
-        self.key_col = key_col
-        self.item_col = item_col
-
-    def transform(self, _input_cdf):
-        df = cudf.read_csv(self.file_path).to_pandas()
-        tqdm.pandas()
-
-
-        df['customer_id'] = customer_hex_id_to_int(df['customer_id'])
-        df['prediction'] = df['prediction'].progress_apply(self.split)
-
-        df = df.explode('prediction').dropna().reset_index(drop=True)
-        df['prediction'] = df['prediction'].astype(int)
-        df.columns = [self.key_col,self.item_col]
-        df = df[df['customer_id'].isin(self.target_customers)]
-
-
-        self.out_cdf = to_cdf(df)
-        out_dic = self.cdf2dic(self.out_cdf, self.key_col, self.item_col)
-
-        return out_dic
-
-    @staticmethod
-    def split(x):
-        if type(x) is str:
-            return x.split(' ')
-        else:
-            return []
 
 
 """ 
