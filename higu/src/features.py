@@ -94,3 +94,44 @@ class ModeCategoryBlock(AbstractBaseBlock):
         )
         out_cdf[col_name] = out_cdf[col_name].astype("category")
         return out_cdf  # %%
+
+
+class SexBlock(AbstractBaseBlock):
+    # その人の性別が何であるかを判断する
+    def __init__(self, key_col, sex_list):
+        self.key_col = key_col
+        self.sex_list = sex_list
+    
+    def fit(self, trans_cdf, art_cdf):
+        return self.transform(trans_cdf, art_cdf)
+
+    def transform(self, trans_cdf: cudf.DataFrame, art_cdf: cudf.DataFrame):
+        women_regexp = "women|girl|ladies"
+        men_regexp = "boy|men" # womenが含まれてしまうのであとで処理する
+        articles_sex_cdf = self.make_article_sex_info(art_cdf, women_regexp, men_regexp)
+        out_cdf = self.make_customer_sex_info(articles_sex_cdf, trans_cdf)
+        return out_cdf 
+
+    def make_article_sex_info(self, art_cdf, women_regexp, men_regexp):
+        df = art_cdf
+        df["women"] = 0
+        df["men"] = 0
+
+        # どこかのcolでwomenっぽい単語があれば女性と判断で良さそう
+        for col in ["index_name", "index_group_name","section_name"]:
+            df[col] = df[col].str.lower()
+            df["women"] += df[col].str.contains(women_regexp).astype(int) 
+            # womenを含む場合があるので対処
+            mens = df[col].str.contains(men_regexp).astype(int) - df[col].str.contains("women").astype(int)
+            df["men"] += mens
+        
+        # 0でなければ女性と判断(3列あるので、足し合わせると3になってしまうことがある。その対処)
+        df["women"] = (df["women"] > 0).astype(int)
+        df["men"] = (df["men"] > 0).astype(int)
+        return df
+
+    def make_customer_sex_info(self, articles_sex_cdf, trans_cdf):
+        trans = trans_cdf.merge(articles_sex_cdf,on="article_id", how="left")
+        rename_dict = {"women":"women_score", "men":"men_score"}
+        sex_cdf = trans.groupby("customer_id")[["women","men"]].mean().reset_index().rename(columns=rename_dict)
+        return sex_cdf

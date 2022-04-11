@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, List
 
 import cudf
+from h_and_m.higu.src.features import SexBlock
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
@@ -159,6 +160,7 @@ for phase in phases:
 
 
 agg_list = ["mean", "max", "min", "std", "median"]
+sex_list = []
 feature_blocks = [
     EmbBlock("article_id", article_emb_dic),
     *[
@@ -191,6 +193,9 @@ feature_blocks = [
             "garment_group_no",
         ]
     ],
+    *[
+        SexBlock("sex", articles_cdf, trans_cdf)
+    ]
 ]
 
 param = {
@@ -277,6 +282,12 @@ def feature_generation(blocks, trans_cdf, art_cdf, cust_cdf) -> pd.DataFrame:
                 cust_feat_cdf = cust_feat_cdf.merge(
                     feature_cdf, how="left", on=block.key_col
                 )
+            elif block.key_col == "sex":
+                sex_cdf = block.fit(trans_cdf, art_cdf)
+                cust_feat_cdf = cust_feat_cdf.merge(
+                    sex_cdf, how="left", on="customer_id"
+                )
+
 
     cust_df = cust_cdf.merge(cust_feat_cdf, on="customer_id", how="left").to_pandas()
     art_df = art_cdf.merge(art_feat_cdf, on="article_id", how="left").to_pandas()
