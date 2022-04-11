@@ -25,7 +25,8 @@ from sqlalchemy import column
 from tqdm import tqdm
 
 if True:
-    sys.path.append("../")
+    #sys.path.append("../")
+    sys.path.append("/content/drive/MyDrive/competition/h_and_m/higu/src/")
     from candidacies import (AbstractCGBlock, BoughtItemsAtInferencePhase,
                              LastNWeekArticles, PopularItemsoftheLastWeeks,
                              candidates_dict2df)
@@ -39,7 +40,7 @@ if True:
                        timer)
 
 
-root_dir = Path("/home/kokoro/h_and_m/higu")
+root_dir = Path("/content/drive/MyDrive/competition/") #Path("/home/kokoro/h_and_m/higu")
 input_dir = root_dir / "input"
 output_dir = root_dir / "output"
 DRY_RUN = False
@@ -92,8 +93,8 @@ def fit_single_lgbm(train_X, train_y, val_X, val_y, params, verbose=50):
     return model, val_pred
 
 
-%load_ext autoreload
-%autoreload 2
+# %load_ext autoreload
+# %autoreload 2
 
 
 pd.options.display.max_rows = 100
