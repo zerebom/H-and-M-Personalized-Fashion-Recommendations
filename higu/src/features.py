@@ -98,9 +98,8 @@ class ModeCategoryBlock(AbstractBaseBlock):
 
 class SexBlock(AbstractBaseBlock):
     # その人の性別が何であるかを判断する
-    def __init__(self, key_col, sex_list):
+    def __init__(self, key_col):
         self.key_col = key_col
-        self.sex_list = sex_list
     
     def fit(self, trans_cdf, art_cdf):
         return self.transform(trans_cdf, art_cdf)
