@@ -95,6 +95,48 @@ class ModeCategoryBlock(AbstractBaseBlock):
         out_cdf[col_name] = out_cdf[col_name].astype("category")
         return out_cdf  # %%
 
+class SexBlock(AbstractBaseBlock):
+    # その人の性別が何であるかを判断する
+    def __init__(self, key_col):
+        self.key_col = key_col
+    
+    def fit(self, trans_cdf, art_cdf):
+        return self.transform(trans_cdf, art_cdf)
+
+    def transform(self, trans_cdf: cudf.DataFrame, art_cdf: cudf.DataFrame):
+        women_regexp = "women|girl|ladies"
+        men_regexp = "boy|men" # womenが含まれてしまうのであとで処理する
+        articles_sex_cdf = self.make_article_sex_info(art_cdf, women_regexp, men_regexp)
+        out_cdf = self.make_customer_sex_info(articles_sex_cdf, trans_cdf)
+        return out_cdf 
+
+    def make_article_sex_info(df, women_regexp, men_regexp):
+        df["women"] = 0
+        df["men"] = 0
+
+        # どこかのcolでwomenっぽい単語があれば女性と判断で良さそう
+        for col in ["index_name", "index_group_name","section_name"]:
+            df[col] = df[col].str.lower()
+            df["women"] += df[col].str.contains(women_regexp).astype(int) 
+            # womenを含む場合があるので対処
+            mens = df[col].str.contains(men_regexp).astype(int) - df[col].str.contains("women").astype(int)
+            df["men"] += mens
+
+        # 0でなければ女性と判断(3列あるので、足し合わせると3になってしまうことがある。その対処)
+        df["women_flg"] = (df["women"] > 0).astype(int)
+        df["men_flg"] = (df["men"] > 0).astype(int)
+
+        # 必要なものはそのarticleがwomenなのかmenなのかの情報だけ
+        return_df = df[["article_id","women_flg","men_flg"]]
+        return return_df
+
+    def make_customer_sex_info(articles_sex, transactions):
+        trans = transactions.merge(articles_sex,on="article_id", how="left")
+        assert len(transactions) == len(trans), "mergeうまくいってないです"
+        rename_dict = {"women_flg":"women_percentage", "men_flg":"men_percentage"}
+        trans = trans.groupby("customer_id")[["women_flg","men_flg"]].mean().reset_index().rename(columns=rename_dict)
+        return trans
+
 
 class RepeatSalesUserNum5(AbstractBaseBlock):
     # 一旦2-5を出そう
