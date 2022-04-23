@@ -94,3 +94,35 @@ class ModeCategoryBlock(AbstractBaseBlock):
         )
         out_cdf[col_name] = out_cdf[col_name].astype("category")
         return out_cdf  # %%
+
+
+class RepeatSalesUserNum5(AbstractBaseBlock):
+    # 一旦2-5を出そう
+    # TODO: ハードコーディング部分を直す？考える
+    def __init__(self, key_col):
+        self.key_col = key_col
+    
+    def fit(self, trans_cdf, art_cdf):
+        return self.transform(trans_cdf, art_cdf)
+
+    def transform(self, trans_cdf: cudf.DataFrame, art_cdf: cudf.DataFrame):
+        repeat_num_df = self.repeat_num(trans_cdf)
+        
+        out_cdf = art_cdf[["article_id"]] # 最初に紐づける先を用意する
+        # 0件購入はいないので考えない, 2-5までを出す
+        for i in np.arange(2,6): # array([1, 2, 3, 4, 5])
+            df = repeat_num_df.query(f"sales_num=={i}")[["article_id","repeat_sales_num"]]
+            df.columns = ["article_id", f"repeat_in_{i}_sales"]
+            out_cdf = out_cdf.merge(df, on="article_id", how="left")
+        return out_cdf 
+
+    def repeat_num(self, trans_cdf):
+        sales_df = trans_cdf.groupby(["customer_id","article_id"]).size().reset_index()
+        sales_df.columns = ["customer_id","article_id", "sales"]
+        sales_num_df = sales_df.groupby(["article_id", "sales"]).size().reset_index()
+        sales_num_df.columns = ["article_id", "sales_num", "count"]
+
+        # リピート回数がn回以上のところを探せるようにcumsum出す
+        repeat_num = sales_num_df.sort_values(["article_id", "sales_num"], ascending=False)
+        repeat_num["repeat_sales_num"] = repeat_num.groupby("article_id")["count"].cumsum()
+        return repeat_num
