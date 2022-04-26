@@ -95,7 +95,43 @@ class ModeCategoryBlock(AbstractBaseBlock):
         out_cdf[col_name] = out_cdf[col_name].astype("category")
         return out_cdf  # %%
 
-class SexBlock(AbstractBaseBlock):
+
+# 性別
+class SexArticleBlock(AbstractBaseBlock):
+    # その人の性別が何であるかを判断する
+    def __init__(self, key_col):
+        self.key_col = key_col
+    
+    def fit(self, art_cdf):
+        return self.transform(art_cdf)
+
+    def transform(self, art_cdf: cudf.DataFrame):
+        women_regexp = "women|girl|ladies"
+        men_regexp = "boy|men" # womenが含まれてしまうのであとで処理する
+        df = self.make_article_sex_info(art_cdf, women_regexp, men_regexp)
+        # 必要なものはそのarticleがwomenなのかmenなのかの情報だけ
+        out_cdf = df[["article_id","women_flg","men_flg"]]
+        return out_cdf 
+        
+    def make_article_sex_info(self, art_cdf, women_regexp, men_regexp):
+        df = art_cdf
+        df["women"] = 0
+        df["men"] = 0
+
+        # どこかのcolでwomenっぽい単語があれば女性と判断で良さそう
+        for col in ["index_name", "index_group_name","section_name"]:
+            df[col] = df[col].astype(str).str.lower()
+            df["women"] += df[col].str.contains(women_regexp).astype(int) 
+            # womenを含む場合があるので対処
+            mens = df[col].str.contains(men_regexp).astype(int) - df[col].str.contains("women").astype(int)
+            df["men"] += mens
+        
+        # 0でなければ女性と判断(3列あるので、足し合わせると3になってしまうことがある。その対処)
+        df["women_flg"] = (df["women"] > 0).astype(int)
+        df["men_flg"] = (df["men"] > 0).astype(int)
+        return df
+
+class SexCustomerBlock(AbstractBaseBlock):
     # その人の性別が何であるかを判断する
     def __init__(self, key_col):
         self.key_col = key_col
@@ -104,53 +140,28 @@ class SexBlock(AbstractBaseBlock):
         return self.transform(trans_cdf, art_cdf)
 
     def transform(self, trans_cdf: cudf.DataFrame, art_cdf: cudf.DataFrame):
-        women_regexp = "women|girl|ladies"
-        men_regexp = "boy|men" # womenが含まれてしまうのであとで処理する
-        articles_sex_cdf = self.make_article_sex_info(art_cdf, women_regexp, men_regexp)
+        sex_article = SexArticleBlock("article_id")
+        articles_sex_cdf = sex_article.transform(art_cdf)
         out_cdf = self.make_customer_sex_info(articles_sex_cdf, trans_cdf)
         return out_cdf 
 
-    def make_article_sex_info(df, women_regexp, men_regexp):
-        df["women"] = 0
-        df["men"] = 0
-
-        # どこかのcolでwomenっぽい単語があれば女性と判断で良さそう
-        for col in ["index_name", "index_group_name","section_name"]:
-            df[col] = df[col].str.lower()
-            df["women"] += df[col].str.contains(women_regexp).astype(int) 
-            # womenを含む場合があるので対処
-            mens = df[col].str.contains(men_regexp).astype(int) - df[col].str.contains("women").astype(int)
-            df["men"] += mens
-
-        # 0でなければ女性と判断(3列あるので、足し合わせると3になってしまうことがある。その対処)
-        df["women_flg"] = (df["women"] > 0).astype(int)
-        df["men_flg"] = (df["men"] > 0).astype(int)
-
-        # 必要なものはそのarticleがwomenなのかmenなのかの情報だけ
-        return_df = df[["article_id","women_flg","men_flg"]]
-        return return_df
-
-    def make_customer_sex_info(articles_sex, transactions):
+    def make_customer_sex_info(self,articles_sex, transactions):
         trans = transactions.merge(articles_sex,on="article_id", how="left")
         assert len(transactions) == len(trans), "mergeうまくいってないです"
         rename_dict = {"women_flg":"women_percentage", "men_flg":"men_percentage"}
         trans = trans.groupby("customer_id")[["women_flg","men_flg"]].mean().reset_index().rename(columns=rename_dict)
         return trans
 
-
-class RepeatSalesUserNum5(AbstractBaseBlock):
+class RepeatSalesCustomerNum5(AbstractBaseBlock):
     # 一旦2-5を出そう
     # TODO: ハードコーディング部分を直す？考える
     def __init__(self, key_col):
         self.key_col = key_col
-    
-    def fit(self, trans_cdf, art_cdf):
-        return self.transform(trans_cdf, art_cdf)
-
-    def transform(self, trans_cdf: cudf.DataFrame, art_cdf: cudf.DataFrame):
-        repeat_num_df = self.repeat_num(trans_cdf)
         
-        out_cdf = art_cdf[["article_id"]] # 最初に紐づける先を用意する
+    def transform(self, input_cdf: cudf.DataFrame):
+        repeat_num_df = self.repeat_num(input_cdf)
+        
+        out_cdf = input_cdf[["article_id"]].drop_duplicates()     # 最初に紐づける先を用意する
         # 0件購入はいないので考えない, 2-5までを出す
         for i in np.arange(2,6): # array([1, 2, 3, 4, 5])
             df = repeat_num_df.query(f"sales_num=={i}")[["article_id","repeat_sales_num"]]
@@ -158,8 +169,8 @@ class RepeatSalesUserNum5(AbstractBaseBlock):
             out_cdf = out_cdf.merge(df, on="article_id", how="left")
         return out_cdf 
 
-    def repeat_num(self, trans_cdf):
-        sales_df = trans_cdf.groupby(["customer_id","article_id"]).size().reset_index()
+    def repeat_num(self, input_cdf: cudf.DataFrame):
+        sales_df = input_cdf.groupby(["customer_id","article_id"]).size().reset_index()
         sales_df.columns = ["customer_id","article_id", "sales"]
         sales_num_df = sales_df.groupby(["article_id", "sales"]).size().reset_index()
         sales_num_df.columns = ["article_id", "sales_num", "count"]
