@@ -231,3 +231,60 @@ def convert_sub_df_customer_id_to_str(input_dir:Path, sub_fmt_df:pd.DataFrame)->
 
     converted_sub_fmt_df['prediction'] = sub_list
     return converted_sub_fmt_df
+
+
+import nltk
+import re
+import string
+
+from nltk.corpus import stopwords
+nltk.download('stopwords')
+
+
+def del_eng_stop_words(text):
+        #===== ストップワード =====
+        stop_words_nltk = nltk.corpus.stopwords.words('english')
+
+        #!マークなども消したいので正規表現で空文字に置換
+        regex = re.compile('[' +re.escape(string.punctuation) + '0-9\\r\\t\\n]')
+        sample = regex.sub("", text)
+
+        #小文字にして、stop wordsに入っていなければリストに追加
+        words = [w.lower()  for w in sample.split(" ") \
+            if not w.lower()  in stop_words_nltk]
+        words=' '.join(words)
+        return words
+        
+def text_preprocessing(articles_cdf):
+    ## cudeで.applyが使えないので、dfで処理を書く
+    articles = articles_cdf.to_pandas()
+    articles['detail_desc'] = articles['detail_desc'].fillna(' ')
+
+    # 商品説明以外のtxt情報も使用 (色とか)
+    articles["text"] = articles.apply(
+        lambda x: " ".join(
+            [
+                str(x["prod_name"]),
+                str(x["product_type_name"]),
+                str(x["product_group_name"]),
+                str(x["graphical_appearance_name"]),
+                str(x["colour_group_name"]),
+                str(x["perceived_colour_value_name"]),
+                str(x["index_name"]),
+                str(x["section_name"]),
+                str(x["detail_desc"])
+            ]
+        ),
+        axis=1,
+    )
+
+    # stop word削除
+    articles["text"] = articles["text"].apply(lambda x:del_eng_stop_words(x))
+    articles_cdf = cudf.from_pandas(articles[['article_id', 'text']])
+    return articles_cdf
+
+def pre_process_article_cdf(input_cdf):
+    articles_cdf = text_preprocessing(input_cdf)
+    return articles_cdf
+    
+    
