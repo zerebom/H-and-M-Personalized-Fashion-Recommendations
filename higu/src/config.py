@@ -10,7 +10,7 @@ RANK_PARAM = {
     "colsample_bytree": 0.5,
     "subsample_freq": 3,
     "subsample": 0.9,
-    "n_estimators": 1000,
+    "n_estimators": 10000,
     "importance_type": "gain",
     "reg_lambda": 1.5,
     "reg_alpha": 0.1,
