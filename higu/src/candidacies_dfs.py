@@ -9,14 +9,17 @@ from utils import customer_hex_id_to_int
 
 to_cdf = cudf.DataFrame.from_pandas
 
+
 class AbstractCGBlock:
     def fit(
-        self, trans_cdf, art_cdf, cust_cdf, logger, y_cdf,target_customers
+        self, trans_cdf, art_cdf, cust_cdf, logger, y_cdf, target_customers
     ) -> pd.DataFrame:
 
         self.out_cdf = self.transform(trans_cdf, art_cdf, cust_cdf, target_customers)
-        self.out_cdf['candidate_block_name'] = self.__class__.__name__
-        self.out_cdf['candidate_block_name'] = self.out_cdf['candidate_block_name'].astype("category")
+        self.out_cdf["candidate_block_name"] = self.__class__.__name__
+        self.out_cdf["candidate_block_name"] = self.out_cdf[
+            "candidate_block_name"
+        ].astype("category")
         self.inspect(y_cdf, logger)
         out_df = self.out_cdf.to_pandas()
         return out_df
@@ -36,7 +39,7 @@ class AbstractCGBlock:
             article_cnt = self.out_cdf["article_id"].nunique()
             merged_cdf = self.out_cdf.merge(
                 y_cdf, on=["customer_id", "article_id"], how="inner"
-            )
+            ).drop_duplicates()
             all_pos_cnt = len(y_cdf)
 
             pos_in_cg_cnt = len(merged_cdf)
@@ -89,33 +92,85 @@ class LastNWeekArticles(AbstractCGBlock):
 
         return self.out_cdf
 
-# class PopularItemsoftheLastWeeks(AbstractCGBlock):
-#     """
-#     最終購入週の人気アイテムtopNを返す
-#     TODO: 最終購入数以外の商品も取得できるようにする
 
-#     """
+class PopularItemsoftheLastWeeks(AbstractCGBlock):
+    """
+    最終購入週の人気アイテムtopNを返す
+    """
 
-#     def __init__(
-#         self, customer_ids, key_col="customer_id", item_col="article_id", n=12
-#     ):
-#         self.customer_ids = customer_ids
-#         self.key_col = key_col
-#         self.item_col = item_col
-#         self.n = n
+    def __init__(self, key_col="customer_id", item_col="article_id", n=12):
+        self.key_col = key_col
+        self.item_col = item_col
+        self.n = n
 
-#     def transform(self, _input_cdf):
-#         input_cdf = _input_cdf.copy()
-#         pop_item_dic = {}
-#         self.popular_items = (
-#             input_cdf.loc[input_cdf["week"] == input_cdf["week"].max()][self.item_col]
-#             .value_counts()
-#             .to_pandas()
-#             .index[: self.n]
-#             .values
-#         )
+    def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
+        input_cdf = trans_cdf.copy()
+        last_week = input_cdf["week"].max()
+        input_last_week_cdf = input_cdf.loc[input_cdf["week"] == last_week]
 
-#         for cust_id in self.customer_ids:
-#             pop_item_dic[cust_id] = list(self.popular_items)
+        topN = np.array(
+            input_last_week_cdf["article_id"]
+            .value_counts()
+            .to_pandas()
+            .index.astype("int32")[: self.n]
+        )
 
-#         return pop_item_dic
+        out_df_list = []
+        _out_df = pd.DataFrame({"article_id": topN})
+        for customer in tqdm(target_customers):
+            _out_df["customer_id"] = customer
+            out_df_list.append(_out_df.copy())
+
+        self.out_cdf = cudf.from_pandas(pd.concat(out_df_list).reset_index(drop=True))
+        return self.out_cdf
+
+    # class PopularItemsoftheLastWeeks(AbstractCGBlock):
+    #     """
+    #     最終購入週の人気アイテムtopNを返す
+    #     TODO: 最終購入数以外の商品も取得できるようにする
+
+    #     """
+
+    #     def __init__(
+    #         self, customer_ids, key_col="customer_id", item_col="article_id", n=12
+    #     ):
+    #         self.customer_ids = customer_ids
+    #         self.key_col = key_col
+    #         self.item_col = item_col
+    #         self.n = n
+
+    #     def transform(self, _input_cdf):
+    #         input_cdf = _input_cdf.copy()
+    #         pop_item_dic = {}
+    #         self.popular_items = (
+    #             input_cdf.loc[input_cdf["week"] == input_cdf["week"].max()][self.item_col]
+    #             .value_counts()
+    #             .to_pandas()
+    #             .index[: self.n]
+    #             .values
+    #         )
+
+    #         for cust_id in self.customer_ids:
+    #             pop_item_dic[cust_id] = list(self.popular_items)
+
+    #         return pop_item_dic
+
+    """
+    ルールベース候補生成
+    """
+
+    def __init__(
+        self, key_col="customer_id", item_col="article_id", rule_based_cdf=None
+    ):
+        self.key_col = key_col
+        self.item_col = item_col
+        self.rule_based_cdf = rule_based_cdf
+        self.out_keys = [key_col, item_col]
+
+    def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
+        input_cdf = self.rule_based_cdf  # ルールベースのcdfを読み込み
+        self.out_cdf = input_cdf[
+            input_cdf["customer_id"].isin(target_customers)
+        ]  # bought_cust_ids
+
+        return self.out_cdf
