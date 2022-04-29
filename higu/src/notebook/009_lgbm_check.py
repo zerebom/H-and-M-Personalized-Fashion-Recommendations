@@ -33,7 +33,7 @@ df.head(30)
 
 
 # %%
-df['prediction'].value_counts()
+df["prediction"].value_counts()
 
 
 # %%

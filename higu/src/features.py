@@ -72,6 +72,8 @@ class TargetRollingBlock(TargetEncodingBlock):
 
 
 class ModeCategoryBlock(AbstractBaseBlock):
+    # TODO:train,validでFitとtransformを使い分ける必要がある
+
     # key_colごとにtarget_colのmodeを算出
     def __init__(self, key_col, target_col):
         self.key_col = key_col
@@ -92,5 +94,7 @@ class ModeCategoryBlock(AbstractBaseBlock):
             .reset_index()
             .rename({self.target_col: col_name}, axis=1)
         )
+        out_cdf = to_cdf(out_cdf.to_pandas().fillna(-1))
         out_cdf[col_name] = out_cdf[col_name].astype("category")
+        # out_cdf[col_name].cat.add_categories(-1)
         return out_cdf  # %%
