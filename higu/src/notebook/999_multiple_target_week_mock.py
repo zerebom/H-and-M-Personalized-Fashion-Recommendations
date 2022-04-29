@@ -33,7 +33,7 @@ def make_train_valid_df():
 
         base_df = negative_sampling(base_df, clipped_trans_cdf, y_cdf)  # 適当に間引くはず
 
-        art_feat_df, cust_feat_df, pair_feat_df = feature_generation_with_transaction(
+        art_feat_df, cust_feat_df, pair_feat_df = feature_generation(
             feature_blocks,
             clipped_trans_cdf,
             buyable_art_cdf,
@@ -43,9 +43,7 @@ def make_train_valid_df():
         # 特徴量作成
         base_df = base_df.merge(cust_feat_df, how="left", on="customer_id")
         base_df = base_df.merge(art_feat_df, how="left", on="article_id")
-        base_df = base_df.merge(
-            pair_feat_df, how="left", on=["article_id", "customer_id"]
-        )
+        base_df = base_df.merge(pair_feat_df, how="left", on=["article_id", "customer_id"])
         base_df["target_week"] = target_week
         base_df["y"] = (
             base_df.merge(y_cdf, how="left", on=["customer_id", "article_id"])["y"]
@@ -73,12 +71,8 @@ def make_train_valid_df():
     # train_df = feature_generation_with_customer(train_df, customer_cdf)
     # valid_df = feature_generation_with_customer(valid_df, customer_cdf)
 
-    train_df["query_id"] = (
-        train_df.groupby(["customer_id", "target_week"]).size().values
-    )
-    valid_df["query_id"] = (
-        valid_df.groupby(["customer_id", "target_week"]).size().values
-    )
+    train_df["query_id"] = train_df.groupby(["customer_id", "target_week"]).size().values
+    valid_df["query_id"] = valid_df.groupby(["customer_id", "target_week"]).size().values
 
     return train_df, valid_df
 
