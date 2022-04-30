@@ -1,7 +1,6 @@
 #%%
-# %load_ext autoreload
-# %autoreload 2
-
+%load_ext autoreload
+%autoreload 2
 
 import matplotlib.pyplot as plt
 from asyncio import SubprocessTransport
@@ -89,12 +88,12 @@ agg_list = ["mean", "max", "min", "std", "median"]
 
 article_feature_blocks = [
     # *[SexArticleBlock("article_id")],
-    *[
-        EmbBlock("article_id", article_desc_bert_dic, "bert"),
-    ],
-    *[
-        EmbBlock("article_id", resnet18_umap_10_dic, "res18"),
-    ],
+    # *[
+    #     EmbBlock("article_id", article_desc_bert_dic, "bert"),
+    # ],
+    # *[
+    #     EmbBlock("article_id", resnet18_umap_10_dic, "res18"),
+    # ],
 ]
 
 transaction_feature_blocks = [

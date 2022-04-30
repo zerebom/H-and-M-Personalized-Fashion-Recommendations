@@ -1,6 +1,6 @@
-#%%
-%load_ext autoreload
-%autoreload 2
+# %%
+# %load_ext autoreload
+# %autoreload 2
 
 import matplotlib.pyplot as plt
 from asyncio import SubprocessTransport
@@ -22,7 +22,12 @@ from tqdm import tqdm
 if True:
     sys.path.append("../")
     sys.path.append("/home/kokoro/h_and_m/higu/src")
-    from candidacies_dfs import LastBoughtNArticles, PopularItemsoftheLastWeeks, LastNWeekArticles
+    from candidacies_dfs import (
+        LastBoughtNArticles,
+        PopularItemsoftheLastWeeks,
+        LastNWeekArticles,
+        PairsWithLastBoughtNArticles,
+    )
     from eda_tools import visualize_importance
     from features import (
         EmbBlock,
@@ -30,6 +35,7 @@ if True:
         TargetEncodingBlock,
         LifetimesBlock,
         SexArticleBlock,
+        SexCustomerBlock,
     )
     from metrics import mapk, calc_map12
     import config
@@ -73,47 +79,50 @@ to_cdf = cudf.DataFrame.from_pandas
 
 # %%
 raw_trans_cdf, raw_cust_cdf, raw_art_cdf = read_cdf(input_dir, DRY_RUN)
-
-#%%
-
 with open(str(input_dir / "emb/article_desc_bert.json")) as f:
     article_desc_bert_dic = json.load(f, object_hook=jsonKeys2int)
 
-with open(str(input_dir / "emb/resnet-18_umap_10.json")) as f:
-    resnet18_umap_10_dic = json.load(f, object_hook=jsonKeys2int)
+# with open(str(input_dir / "emb/resnet-18_umap_10.json")) as f:
+#     resnet18_umap_10_dic = json.load(f, object_hook=jsonKeys2int)
 
 
 #%%
 agg_list = ["mean", "max", "min", "std", "median"]
 
 article_feature_blocks = [
-    # *[SexArticleBlock("article_id")],
-    # *[
-    #     EmbBlock("article_id", article_desc_bert_dic, "bert"),
-    # ],
+    *[SexArticleBlock("article_id")],
+    *[
+        EmbBlock("article_id", article_desc_bert_dic, "bert"),
+    ],
     # *[
     #     EmbBlock("article_id", resnet18_umap_10_dic, "res18"),
     # ],
 ]
 
 transaction_feature_blocks = [
+    *[SexCustomerBlock("customer_id")],
     *[LifetimesBlock("customer_id", "price")],
     *[
         TargetEncodingBlock(
             "article_id",
+            "customer_id",
             "age",
             agg_list + ["count"],
         )
     ],
     *[
-        TargetEncodingBlock("article_id", col, ["mean"])
+        TargetEncodingBlock("article_id", "customer_id", col, ["mean"])
         for col in ["FN", "Active", "club_member_status", "fashion_news_frequency"]
     ],
-    *[TargetEncodingBlock("customer_id", col, agg_list) for col in ["price", "sales_channel_id"]],
+    *[
+        TargetEncodingBlock("article_id", ["customer_id", "article_id"], col, agg_list)
+        for col in ["price", "sales_channel_id"]
+    ],
 ]
 
 candidate_blocks = [
-    *[PopularItemsoftheLastWeeks(n=12)],
+    *[PairsWithLastBoughtNArticles(n=30)],
+    *[PopularItemsoftheLastWeeks(n=30)],
     *[LastBoughtNArticles(n=30)],
     *[LastNWeekArticles(n_weeks=2)],
 ]
@@ -162,29 +171,19 @@ def candidate_generation(
     return candidates_df
 
 
-def feature_generation(blocks, trans_cdf, art_cdf, cust_cdf):
+def feature_generation(blocks, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers=None):
     """
     feature_generation blocksを使って、特徴量を作成する。
     art_id, cust_idをkeyに持つdataframeを返す。
     """
 
-    # CHECK: 割とmem消費の激しい処理。メモリエラーにならないか注視する
-    # TODO: このままの実装だと、transactionの存在しない、art,custの特徴量を取得できない
-    # ex):類似アイテムで取得してきたcandidateに対して、transactionがない場合
-    trans_w_art_cust_info_cdf = trans_cdf.merge(art_cdf, on="article_id", how="left").merge(
-        cust_cdf, on="customer_id", how="left"
-    )
-
-    drop_cols = trans_w_art_cust_info_cdf.to_pandas().filter(regex=".*_name").columns
-    trans_w_art_cust_info_cdf.drop(columns=drop_cols, inplace=True)
     art_feat_cdf = art_cdf[["article_id"]]  # base
     cust_feat_cdf = cust_cdf[["customer_id"]]
 
     for block in blocks:
         with timer(logger=logger, prefix="fit {} ".format(block.__class__.__name__)):
 
-            # TODO: EmbBlockなどはtrans_w_art_cust_info_cdfを使いたくない
-            feature_cdf = block.fit(trans_w_art_cust_info_cdf)
+            feature_cdf = block.fit(trans_cdf, art_cdf, cust_cdf, logger, y_cdf, target_customers)
 
             if block.key_col == "article_id":
                 art_feat_cdf = art_feat_cdf.merge(feature_cdf, how="left", on=block.key_col)
@@ -219,7 +218,7 @@ def negative_sampling(base_df, logger):
         pass
 
     sampled_df = pd.concat([positive_df, negative_df])
-    sampled_df = sampled_df.sample(frac=1, random_state=42).reset_index(drop=True)
+
     return sampled_df
 
 
@@ -241,13 +240,21 @@ def make_train_valid_df(
             target_customers=None,
         )
 
-        base_df = negative_sampling(base_df, logger)
+        if phase == "train":
+            base_df = negative_sampling(base_df, logger)
+
+        base_df = base_df.sample(frac=1, random_state=42).reset_index(drop=True)
+        base_df = base_df.drop_duplicates(
+            subset=["customer_id", "article_id", "candidate_block_name"], keep="first"
+        ).reset_index(drop=True)
 
         art_feat_df, cust_feat_df, pair_feat_df = feature_generation(
-            feature_blocks,
+            transaction_feature_blocks,
             clipped_trans_cdf,
             art_cdf,
             cust_cdf,
+            y_cdf,
+            target_customers=None,
         )
 
         # 特徴量作成
@@ -274,10 +281,22 @@ def make_train_valid_df(
 
 
 #%%
-s_block = SexArticleBlock("article_id")
 
-#%%
+art_df_w_feat, _, _ = feature_generation(
+    article_feature_blocks,
+    raw_trans_cdf,
+    raw_art_cdf,
+    raw_cust_cdf,
+    y_cdf=None,
+    target_customers=None,
+)
 
+drop_article_columns = list(raw_art_cdf.columns)
+drop_article_columns.remove("article_id")
+art_df_w_feat = art_df_w_feat.drop(drop_article_columns, axis=1)
+
+art_cdf_w_feat = to_cdf(art_df_w_feat)
+del art_df_w_feat
 
 #%%
 target_weeks = [104, 103, 102, 101, 100]  # test_yから何週間離れているか
@@ -290,13 +309,13 @@ if DRY_RUN:
         .to_frame()
         .reset_index()
         .query(f"week == True")["customer_id"]
-        .values[:10]
+        .values[:1000]
     )
 
     trans_cdf = raw_trans_cdf.query(f"customer_id in {list(sample_ids)}")
     train_df, valid_df, train_groups, valid_groups = make_train_valid_df(
         trans_cdf,
-        raw_art_cdf,
+        art_cdf_w_feat,
         raw_cust_cdf,
         target_weeks,
         candidate_blocks,
@@ -305,31 +324,13 @@ if DRY_RUN:
 else:
     train_df, valid_df, train_groups, valid_groups = make_train_valid_df(
         raw_trans_cdf,
-        raw_art_cdf,
-        # raw_art_cdf_w_feat,
+        art_cdf_w_feat,
         raw_cust_cdf,
         target_weeks,
         candidate_blocks,
         transaction_feature_blocks,
     )
 
-#%%
-
-art_df_w_feat, _, _ = feature_generation(
-    article_feature_blocks, raw_trans_cdf, raw_art_cdf, raw_cust_cdf
-)
-
-drop_article_columns = list(raw_art_cdf.columns)
-drop_article_columns.remove("article_id")
-art_df_w_feat = art_df_w_feat.drop(drop_article_columns, axis=1)
-#%%
-
-
-#%%
-train_df = train_df.merge(art_df_w_feat, how="left", on="article_id")
-valid_df = valid_df.merge(art_df_w_feat, how="left", on="article_id")
-#%%
-train_df
 
 #%%
 # train_df.to_csv(output_dir / "train_df.csv", index=False)
@@ -342,10 +343,7 @@ train_df
 drop_cols = ["customer_id", "article_id", "target_week", "y"]
 train_X = train_df.drop(drop_cols, axis=1)
 valid_X = valid_df.drop(drop_cols, axis=1)
-#%%
-set(list(valid_X.columns)) - set(train_X.columns)
-#%%
-valid_X.drop(columns='prediction',inplace=True)
+
 
 #%%
 
@@ -356,9 +354,9 @@ RANK_PARAM = {
     "eval_at": [12],
     "verbosity": -1,
     "boosting": "gbdt",
-    # "is_unbalance": True,
+    "is_unbalance": True,
     "seed": 42,
-    "learning_rate": 0.01,
+    "learning_rate": 0.05,
     "colsample_bytree": 0.5,
     "subsample_freq": 3,
     "subsample": 0.9,
@@ -444,15 +442,19 @@ sub_customer_ids = submission_df["customer_id"].unique()
 #%%
 # ここに特徴生成 バッチ推論ではclipped_trans_cdfが同様のため先に特徴は作る
 art_feat_df, cust_feat_df, pair_feat_df = feature_generation(
-    feature_blocks,
-    clipped_trans_cdf,  # 特徴生成なので全ユーザーのtransactionが欲しい。けどメモリのために期間は絞る
-    raw_art_cdf_w_feat,
-    raw_cust_cdf,  # base_dfに入っているuser_id,article_idが必要
+    transaction_feature_blocks,
+    raw_trans_cdf,
+    art_cdf_w_feat,
+    raw_cust_cdf,
+    y_cdf=None,
+    target_customers=None,
 )
+
 art_feat_df = reduce_mem_usage(art_feat_df)
 cust_feat_df = reduce_mem_usage(cust_feat_df)
 candidate_blocks_test = [
-    *[PopularItemsoftheLastWeeks(n=12)],
+    *[PairsWithLastBoughtNArticles(n=30)],
+    *[PopularItemsoftheLastWeeks(n=30)],
     *[LastBoughtNArticles(n=30)],
     *[LastNWeekArticles(n_weeks=2)],
 ]
@@ -469,7 +471,7 @@ for bucket in tqdm(range(0, len(sub_customer_ids), BATCH_USER_SIZE)):
     batch_base_df = candidate_generation(
         candidate_blocks_test,
         batch_trans_cdf,
-        raw_art_cdf_w_feat,
+        art_cdf_w_feat,
         raw_cust_cdf,
         y_cdf=None,
         target_customers=batch_customer_ids,
@@ -494,6 +496,10 @@ for bucket in tqdm(range(0, len(sub_customer_ids), BATCH_USER_SIZE)):
     batch_submission_df = batch_base_df[["customer_id", "article_id", "pred"]]
     batch_submission_df.sort_values(["customer_id", "pred"], ascending=False, inplace=True)
 
+    batch_submission_df.drop_duplicates(
+        subset=["customer_id", "article_id"], keep="first", inplace=True
+    )
+
     batch_submission_df = batch_submission_df.groupby("customer_id").head(12)
 
     batch_submission_df = batch_submission_df.groupby("customer_id")[["article_id"]].aggregate(
@@ -516,14 +522,17 @@ submission_df = submission_df.merge(preds_df, on="customer_id", how="left")
 submission_df["customer_id"] = pd.read_csv(input_dir / "sample_submission.csv")["customer_id"]
 if "prediction" in submission_df.columns:
     submission_df.drop(columns="prediction", inplace=True)
-#%%
 submission_df.rename(columns={"article_id": "prediction"}, inplace=True)
 
 
 #%%
-submission_df.to_csv(log_dir / "submission_df.csv", index=False)
+prefix = datetime.now().strftime(f"%m%d_%H%M")
+submission_df.to_csv(log_dir / f"submission_df_{prefix}.csv", index=False)
 
 # submission_df.iloc[:, [0, 2]].to_csv(log_dir / "submission_df.csv", index=False)
 #%%
 (submission_df["prediction"].astype(str).apply(lambda x: len(x)) < 10).sum()
+# %%
+train_df.isnull().sum()
+
 # %%

@@ -101,7 +101,7 @@ class LastBoughtNArticles(AbstractCGBlock):
 
     def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
         input_df = trans_cdf[self.out_keys].to_pandas()
-        self.out_cdf = to_cdf(input_df.groupby("customer_id").head(self.n))
+        self.out_cdf = to_cdf(input_df.groupby("customer_id").tail(self.n))
         return self.out_cdf
 
 
@@ -121,7 +121,7 @@ class PopularItemsoftheLastWeeks(AbstractCGBlock):
         input_last_week_cdf = input_cdf.loc[input_cdf["week"] == last_week]
 
         TopN_articles = list(
-            input_last_week_cdf["article_id"].value_counts().head(self.n).to_pandas().index
+            input_last_week_cdf["article_id"].value_counts().tail(self.n).to_pandas().index
         )
 
         if target_customers is None:
@@ -129,52 +129,37 @@ class PopularItemsoftheLastWeeks(AbstractCGBlock):
 
         # Ref: https://note.nkmk.me/python-itertools-product/
         self.out_cdf = cudf.DataFrame(
-            list(itertools.product(target_customers, TopN_articles)), columns=[self.key_col, self.item_col]
+            list(itertools.product(target_customers, TopN_articles)),
+            columns=[self.key_col, self.item_col],
         )
         return self.out_cdf
 
-class LastNWeekArticles2(AbstractCGBlock):
+
+class PairsWithLastBoughtNArticles(AbstractCGBlock):
     """
-    各ユーザごとに最終購買週からn週間前までの購入商品を取得する
+    各ユーザごとに直近の購入商品N個を取得する
     """
 
-    def __init__(self, key_col="customer_id", item_col="article_id", n_weeks=2):
+    def __init__(self, n, key_col="customer_id", item_col="article_id"):
         self.key_col = key_col
         self.item_col = item_col
-        self.n_weeks = n_weeks
+        self.n = n
         self.out_keys = [key_col, item_col]
 
     def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
-        input_cdf = trans_cdf.copy()
+        #from: https://www.kaggle.com/code/zerebom/article-id-pairs-in-3s-using-cudf/edit
+        pair_df = cudf.read_csv("/home/kokoro/h_and_m/higu/input/pair_df.csv")[["article_id", "pair"]]
 
-        week_df = (
-            input_cdf.groupby(self.key_col)["week"]
-            .max()
-            .reset_index()
-            .rename({"week": "max_week"}, axis=1)
-        )  # ユーザごとに最後に買った週を取得
+        self.out_cdf = to_cdf(
+            trans_cdf.to_pandas()
+            .groupby("customer_id")[["customer_id", "article_id"]]
+            .tail(self.n)
+        )
 
-        input_cdf = input_cdf.merge(week_df, on=self.key_col, how="left")
-        input_cdf["diff_week"] = (
-            input_cdf["max_week"] - input_cdf["week"]
-        )  # 各商品とユーザの最終購入週の差分
-        out_cdf = input_cdf.loc[
-            input_cdf["diff_week"] <= self.n_weeks, self.out_keys
-        ]  # 差分がn週間以内のものを取得
-
-        out_df = out_cdf.to_pandas()
-        pairs = np.load('/home/ec2-user/h_and_m/data/inputs/item_pair_3_months_0616-0922.npy',allow_pickle=True).item()
-        out_df['article_id2'] = out_df.article_id.map(pairs)
-        train2 = out_df[['customer_id','article_id2']].copy()
-        train2 = train2.loc[train2.article_id2.notnull()]
-        train2['article_id2'] = train2['article_id2'].astype('int32')
-        train2 = train2.drop_duplicates(['customer_id','article_id2'])
-        train2 = train2.rename({'article_id2':'article_id'},axis=1)
-        train = out_df[['customer_id','article_id']]
-        train = pd.concat([train,train2],axis=0,ignore_index=True)
-        train.article_id = train.article_id.astype('int32')
-        train = train.drop_duplicates(['customer_id','article_id'])
-
-        self.out_cdf = cudf.from_pandas(train)
-
+        self.out_cdf = (
+            self.out_cdf.merge(pair_df, how="left", on="article_id")
+            .drop(columns="article_id")
+            .dropna()
+            .rename(columns={"pair": "article_id"})
+        )
         return self.out_cdf

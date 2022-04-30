@@ -36,20 +36,20 @@ class EmbBlock(AbstractBaseBlock):
 
 
 class TargetEncodingBlock(AbstractBaseBlock):
-    def __init__(self, key_col, target_col, agg_list):
+    def __init__(self, key_col, join_col, target_col, agg_list):
 
-        self.key_col = key_col
+        self.key_col = key_col  # 集約単位のkey
+        self.join_col = join_col  # target_colを保持するdfのkey
         self.target_col = target_col
         self.agg_list = agg_list
 
     def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
-        if self.key_col == "article_id":
-            input_cdf = trans_cdf.merge(art_cdf[self.key_col, self.target_col])
-        elif self.key_col == "customer_id":
-            input_cdf = trans_cdf.merge(cust_cdf[self.key_col, self.target_col])
+        if self.join_col == "article_id":
+            input_cdf = trans_cdf.merge(art_cdf[[self.join_col, self.target_col]])
+        elif self.join_col == "customer_id":
+            input_cdf = trans_cdf.merge(cust_cdf[[self.join_col, self.target_col]])
         else:
             input_cdf = trans_cdf.copy()
-            logger.info(f"Warning: TargetEncodingBlock join by {self.key_col}")
 
         out_cdf = input_cdf.groupby(self.key_col)[self.target_col].agg(self.agg_list)
         out_cdf.columns = ["_".join([self.target_col, col]) for col in out_cdf.columns]
@@ -153,7 +153,7 @@ class SexArticleBlock(AbstractBaseBlock):
         return out_cdf
 
     def make_article_sex_info(self, art_cdf, women_regexp, men_regexp):
-        df = art_cdf
+        df = art_cdf.copy()
         df["women"] = 0
         df["men"] = 0
 
@@ -179,10 +179,16 @@ class SexCustomerBlock(AbstractBaseBlock):
         self.key_col = key_col
 
     def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
-        sex_article = SexArticleBlock("article_id")
-        articles_sex_cdf = sex_article.transform(
-            trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger
-        )
+
+        # art_cdfに入っているなら、それを呼び出す
+        if "men_flg" in art_cdf:
+            articles_sex_cdf = art_cdf[["article_id", "women_flg", "men_flg"]].copy()
+        else:
+            sex_article = SexArticleBlock("article_id")
+            articles_sex_cdf = sex_article.transform(
+                trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger
+            )
+
         out_cdf = self.make_customer_sex_info(articles_sex_cdf, trans_cdf)
         return out_cdf
 
