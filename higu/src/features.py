@@ -7,10 +7,12 @@ to_cdf = cudf.DataFrame.from_pandas
 
 
 class AbstractBaseBlock:
-    def fit(self, input_cdf: cudf.DataFrame, y=None) -> cudf.DataFrame:
-        return self.transform(input_cdf)
+    def fit(self, trans_cdf, art_cdf, cust_cdf, logger, y_cdf, target_customers) -> cudf.DataFrame:
+        return self.transform(trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger)
 
-    def transform(self, input_cdf: cudf.DataFrame) -> cudf.DataFrame:
+    def transform(
+        self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger
+    ) -> cudf.DataFrame:
         raise NotImplementedError()
 
 
@@ -24,9 +26,7 @@ class EmbBlock(AbstractBaseBlock):
         self.emb_dic = emb_dic
         self.prefix = prefix
 
-    def transform(self, input_cdf: cudf.DataFrame):
-        _ = input_cdf  # input_cdfはinterfaceを揃えるためだけに呼ばれてる(悲しいね)
-
+    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
         out_cdf = cudf.DataFrame(self.emb_dic).T
         out_cdf.columns = [f"{self.prefix}_{col}_emb" for col in out_cdf.columns]
         out_cdf = out_cdf.reset_index().rename({"index": self.key_col}, axis=1)
@@ -42,7 +42,15 @@ class TargetEncodingBlock(AbstractBaseBlock):
         self.target_col = target_col
         self.agg_list = agg_list
 
-    def transform(self, input_cdf: cudf.DataFrame):
+    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
+        if self.key_col == "article_id":
+            input_cdf = trans_cdf.merge(art_cdf[self.key_col, self.target_col])
+        elif self.key_col == "customer_id":
+            input_cdf = trans_cdf.merge(cust_cdf[self.key_col, self.target_col])
+        else:
+            input_cdf = trans_cdf.copy()
+            logger.info(f"Warning: TargetEncodingBlock join by {self.key_col}")
+
         out_cdf = input_cdf.groupby(self.key_col)[self.target_col].agg(self.agg_list)
         out_cdf.columns = ["_".join([self.target_col, col]) for col in out_cdf.columns]
 
@@ -52,6 +60,7 @@ class TargetEncodingBlock(AbstractBaseBlock):
 
 
 class TargetRollingBlock(TargetEncodingBlock):
+    # TODO: 新しいインタフェースにする
     def __init__(self, key_cols, group_col, target_col, agg_list, windows):
 
         super().__init__(key_cols, target_col, agg_list)
@@ -75,6 +84,7 @@ class TargetRollingBlock(TargetEncodingBlock):
 
 
 class ModeCategoryBlock(AbstractBaseBlock):
+    # TODO: 新しいインタフェースにする
     # TODO:train,validでFitとtransformを使い分ける必要がある
 
     # key_colごとにtarget_colのmodeを算出
@@ -109,9 +119,9 @@ class LifetimesBlock(AbstractBaseBlock):
         self.key_col = key_col  # 'customer_id'
         self.target_col = target_col  # 'price'
 
-    def transform(self, input_cdf: cudf.DataFrame):
+    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
         price_mean_cust_dat = (
-            input_cdf.groupby([self.key_col, "t_dat"])[self.target_col]
+            trans_cdf.groupby([self.key_col, "t_dat"])[self.target_col]
             .sum()
             .reset_index()
             .to_pandas()
@@ -134,7 +144,7 @@ class SexArticleBlock(AbstractBaseBlock):
     def __init__(self, key_col):
         self.key_col = key_col
 
-    def transform(self, art_cdf: cudf.DataFrame):
+    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
         women_regexp = "women|girl|ladies"
         men_regexp = "boy|men"  # womenが含まれてしまうのであとで処理する
         df = self.make_article_sex_info(art_cdf, women_regexp, men_regexp)
@@ -168,9 +178,11 @@ class SexCustomerBlock(AbstractBaseBlock):
     def __init__(self, key_col):
         self.key_col = key_col
 
-    def transform(self, input_cdf: cudf.DataFrame):
+    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
         sex_article = SexArticleBlock("article_id")
-        articles_sex_cdf = sex_article.transform(art_cdf)
+        articles_sex_cdf = sex_article.transform(
+            trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger
+        )
         out_cdf = self.make_customer_sex_info(articles_sex_cdf, trans_cdf)
         return out_cdf
 
