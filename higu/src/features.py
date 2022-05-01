@@ -313,7 +313,7 @@ class PostalCodeBlock(AbstractBaseBlock):
         return most_popular_article_cdf
 
 
-class SalesPerTimesInfo(AbstractBaseBlock):
+class SalesPerTimesInfBlock(AbstractBaseBlock):
     def __init__(self, key_col, groupby_cols_dict, agg_list):
         self.key_col = key_col
         self.groupby_cols_dict = groupby_cols_dict
