@@ -363,3 +363,39 @@ class MostFreqBuyDayofWeekBlock(AbstractBaseBlock):
         
         out_cdf = sales_by_dayofweek.sort_values(["customer_id", "sales"], ascending=False).drop_duplicates(subset=['customer_id'],keep='first')[["customer_id","dayofweek"]]  
         return out_cdf 
+
+class UseBuyIntervalBlock(AbstractBaseBlock):
+    def __init__(self, key_col, agg_list):
+        self.key_col = key_col
+        self.agg_list = agg_list
+        
+    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
+        t_dat_df = self.make_day_diff(trans_cdf.copy()) # 直接変更しないようにする
+        
+        # ここで連続するかどうか
+        countinue_buy_df = self.continue_buy(t_dat_df)
+        day_diff_describe_df = self.interval_describe(t_dat_df)
+        
+        # 作成したものをくっつけて, cdfにする
+        coutinue_buy_cdf = cudf.from_pandas(countinue_buy_df)
+        day_diff_describe_cdf = cudf.from_pandas(day_diff_describe_df)
+
+        out_cdf = coutinue_buy_cdf.merge(day_diff_describe_cdf, on="customer_id", how="left")
+        return out_cdf 
+    
+    def make_day_diff(self,trans_cdf):
+        t_dat_cdf = trans_cdf.sort_values(['customer_id',"t_dat_datetime"]).drop_duplicates(subset=['customer_id',"t_dat_datetime"],keep='first')[['customer_id',"t_dat_datetime"]].reset_index()
+        t_dat_df = t_dat_cdf.to_pandas()
+        t_dat_df["shift_t_dat_datetime"] = t_dat_df.groupby("customer_id")[col].shift(1)
+        t_dat_df["day_diff"] = (t_dat_df["t_dat_datetime"] - t_dat_df["shift_t_dat_datetime"] ).dt.days
+        return t_dat_df
+    
+    def continue_buy(self, t_dat_df):
+        t_dat_df["continue_buy_flg"] = (t_dat_df["day_diff"] == 1).astype(int)
+        t_dat_df = t_dat_df.sort_values(['customer_id','continue_buy_flg'], ascending=False).drop_duplicates(subset=['customer_id'],keep='first')[['customer_id','continue_buy_flg']]
+        return t_dat_df
+    
+    def interval_describe(self, t_dat_df):
+        day_diff_describe = t_dat_df.groupby("customer_id")["day_diff"].agg(agg_list).reset_index()
+        day_diff_describe.columns = ["customer_id"] + [f"buy_interval_{i}" for i in agg_list]
+        return day_diff_describe
