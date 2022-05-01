@@ -313,10 +313,11 @@ class PostalCodeBlock(AbstractBaseBlock):
         return most_popular_article_cdf
 
 
-class MaxSalesBlock(AbstractBaseBlock):
-    def __init__(self, key_col, groupby_cols_dict):
+class SalesPerTimesInfo(AbstractBaseBlock):
+    def __init__(self, key_col, groupby_cols_dict, agg_list):
         self.key_col = key_col
         self.groupby_cols_dict = groupby_cols_dict
+        self.agg_list = agg_list
         
     def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):        
         trans_cdf = self.preprocess(trans_cdf.copy()) # 直接変更しないようにする
@@ -342,9 +343,9 @@ class MaxSalesBlock(AbstractBaseBlock):
         sales_by_groupby_cols = trans_cdf.groupby(groupby_cols).size().reset_index()
         sales_by_groupby_cols.columns = groupby_cols + ["sales"]
 
-        max_sales_cdf = sales_by_groupby_cols.groupby("article_id")["sales"].max().reset_index()
-        max_sales_cdf.columns = ["article_id", f"max_sales_per_{groupby_name}"]
-        return max_sales_cdf
+        sales_cdf = sales_by_groupby_cols.groupby("article_id")["sales"].agg(self.agg_list).reset_index()
+        sales_cdf.columns = ["article_id"] +  [f"sales_{groupby_name}_{i}" for i in agg_list]
+        return sales_cdf
 
 
 class MostFreqBuyDayofWeekBlock(AbstractBaseBlock):
