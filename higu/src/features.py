@@ -1,5 +1,6 @@
 import cudf
 import pandas as pd
+import numpy as np
 from lifetimes.utils import summary_data_from_transaction_data
 
 
@@ -230,3 +231,23 @@ class RepeatSalesCustomerNum5(AbstractBaseBlock):
         repeat_num = sales_num_df.sort_values(["article_id", "sales_num"], ascending=False)
         repeat_num["repeat_sales_num"] = repeat_num.groupby("article_id")["count"].cumsum()
         return repeat_num
+
+class SalesPerDay(AbstractBaseBlock):
+    def __init__(self, key_col, agg_list):
+        self.key_col = key_col
+        self.agg_list = agg_list
+    
+    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
+        trans_sales_cdf = self.sales_day(trans_cdf)
+        out_cdf = trans_sales_cdf.groupby("customer_id")["all_sales_per_day"].agg(self.agg_list)
+        out_cdf.columns = [f"sales_in_day_{col}" for col in out_cdf.columns]
+        out_cdf.reset_index(inplace=True)
+        return out_cdf 
+
+    def sales_day(self, trans_cdf):
+        sales_per_day = trans_cdf.groupby(["t_dat"]).size().reset_index()
+        sales_per_day.columns = ["t_dat", "all_sales_per_day"]
+
+        sales_cust_day = trans_cdf.drop_duplicates(subset=["t_dat","customer_id"])[["t_dat","customer_id"]]    
+        trans_sales_cdf = sales_cust_day.merge(sales_per_day, on="t_dat", how="left")
+        return trans_sales_cdf
