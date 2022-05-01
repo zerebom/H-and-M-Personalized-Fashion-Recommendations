@@ -234,6 +234,26 @@ class RepeatSalesCustomerNum5Block(AbstractBaseBlock):
         repeat_num["repeat_sales_num"] = repeat_num.groupby("article_id")["count"].cumsum()
         return repeat_num
 
+class ArticleBiasIndicatorBlock(AbstractBaseBlock):
+    """
+    その商品を買う人に偏りがあるのかどうかといった指標
+    その商品はある一部の人から購入されているのか、万人に購入されているのか
+    また、購入されている人の中ではどれくらい買われているかを出す
+    例：超奇抜なピンクの服 -> ある一部の人から購入されている
+    例：万人に購入されている -> 黒い下着
+    """
+    def __init__(self, key_col):
+        self.key_col = key_col 
+        
+    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
+        bias_cdf = trans_cdf.groupby("article_id")["customer_id"].agg(["nunique","count"]).reset_index()
+        bias_cdf.columns =["article_id", "nunique_customers", "sales"]
+        
+        bias_cdf["sales_by_buy_users"] = bias_cdf["sales"] / bias_cdf["nunique_customers"] # その商品購入する人たちの中ではどれくらい買われるか？
+        out_cdf = bias_cdf[["article_id", "sales_by_buy_users", "nunique_customers"]]
+        return out_cdf
+        
+
 class SalesPerDayBlock(AbstractBaseBlock):
     def __init__(self, key_col, agg_list):
         self.key_col = key_col
