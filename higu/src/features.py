@@ -251,3 +251,66 @@ class SalesPerDay(AbstractBaseBlock):
         sales_cust_day = trans_cdf.drop_duplicates(subset=["t_dat","customer_id"])[["t_dat","customer_id"]]    
         trans_sales_cdf = sales_cust_day.merge(sales_per_day, on="t_dat", how="left")
         return trans_sales_cdf
+
+
+class PostalCodeBlock(AbstractBaseBlock):
+    def __init__(self, key_col, agg_cust_cols, agg_trans_cols, agg_list):
+        self.key_col = key_col
+        self.agg_cust_cols = agg_cust_cols
+        self.agg_trans_cols = agg_trans_cols
+        self.agg_list = agg_list
+        
+    def fit(self, input_cdf: cudf.DataFrame, customer_cdf_add_sex: cudf.DataFrame):
+        return self.transform(input_cdf, customer_cdf_add_sex)
+    
+    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
+        # 準備としてtransにpostal codeをjoinさせる
+        trans_postal_cdf = trans_cdf.merge(cust_cdf[["customer_id","postal_code"]], on="customer_id", how="left")
+        
+        # agg_colsの計算(cust info)
+        out_agg_cust_cdf = cust_cdf.groupby("postal_code")[self.agg_cust_cols].agg(self.agg_list).reset_index()
+        out_agg_cust_cdf.columns = ["postal_code"] + [f"postal_code_{i[0]}_{i[1]}" for i in list(out_agg_cust_cdf.columns[1:])] # 1列はpostal_code
+        
+        # agg_colsの計算(trans info)
+        out_agg_trans_cdf = trans_postal_cdf.groupby("postal_code")[self.agg_trans_cols].agg(self.agg_list).reset_index()
+        out_agg_trans_cdf.columns = ["postal_code"] + [f"postal_code_{i[0]}_{i[1]}" for i in list(out_agg_trans_cdf.columns[1:])] # 1列はpostal_code
+        
+        
+        # 性別特徴量
+        out_sex_cdf = self.sex_per_postal_code(trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger)
+        
+        # 人気商品
+        most_popular_article_cdf = self.most_popular_item(trans_postal_cdf)
+        
+        out_cdf = (
+            out_agg_cust_cdf
+            .merge(out_agg_trans_cdf, on="postal_code", how="left")
+            .merge(out_sex_cdf, on="postal_code", how="left")
+            .merge(most_popular_article_cdf, on="postal_code", how="left")
+        )
+        return out_cdf 
+    
+    def sex_per_postal_code(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
+        # cust_cdfに入っているなら、それを呼び出す
+        if "men_percentage" in cust_cdf:
+            cust_sex_cdf = cust_cdf[["customer_id","postal_code","women_percentage","men_percentage"]].copy()
+        else:
+            # 特徴量を作成する
+            cust_sex = SexCustomerBlock("customer_id")
+            cust_sex_cdf_no_postal = cust_sex.transform(trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger)
+            
+            # postal_code情報を追加する
+            cust_sex_cdf = cust_cdf[["customer_id","postal_code"]].merge(cust_sex_cdf_no_postal, on="customer_id", how="left")
+        # 計算
+        out_sex_cdf = cust_sex_cdf.groupby("postal_code")[["women_percentage","men_percentage"]].agg(self.agg_list).reset_index()
+        out_sex_cdf.columns = ["postal_code"] + [f"postal_code_{i[0]}_{i[1]}" for i in list(out_sex_cdf.columns[1:])] # 1列はpostal_code
+        return out_sex_cdf
+    
+    def most_popular_item(self, trans_postal_cdf):
+        popular_article_cdf = trans_postal_cdf.groupby(["postal_code","article_id"]).size().reset_index()
+        popular_article_cdf.columns = ["postal_code","article_id", "sales_in_postal_code"]
+        # 一番人気の商品を入れる
+        # TODO: もう少し工夫しても良いかも, 同率1位は考えられていない
+        most_popular_article_cdf = popular_article_cdf.sort_values("sales_in_postal_code",ascending=False).drop_duplicates(subset=["postal_code"])[["postal_code","article_id"]]
+        most_popular_article_cdf.columns = ["postal_code","most_popular_article_in_postal"]
+        return most_popular_article_cdf
