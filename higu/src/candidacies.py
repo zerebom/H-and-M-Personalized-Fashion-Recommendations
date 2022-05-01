@@ -5,6 +5,7 @@ import nmslib
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
+from utils import customer_hex_id_to_int
 
 to_cdf = cudf.DataFrame.from_pandas
 
@@ -63,13 +64,13 @@ class AbstractCGBlock:
         return out_dic
 
     def transform(self, input_cdf: cudf.DataFrame) -> Dict[int, List[int]]:
-        '''
+        """
         以下の処理を書いてください
         1. input_cdf を加工して、[customer_id,article_id]ペアをレコードにもつself.out_cdf に格納する
         2. self.out_cdfに self.cdf2dicに渡して[customer_id,List[article_id]]を持つ辞書形式にする
 
         y_cdf,self.out_cdfがある時、inspectが走ります。
-        '''
+        """
 
         raise NotImplementedError()
 
@@ -106,6 +107,49 @@ class AbstractCGBlock:
             cdf.to_pandas().groupby(key_col)[item_col].apply(list).to_dict()
         )  # ユーザごとに商品をリストに変換
         return out_dic
+
+
+class RuleBase(AbstractCGBlock):
+    """
+    ルールベース
+
+    """
+
+    def __init__(
+        self,
+        file_path,
+        target_customers,
+        key_col="customer_id",
+        item_col="article_id",
+    ):
+
+        self.target_customers = target_customers
+        self.file_path = file_path
+        self.key_col = key_col
+        self.item_col = item_col
+
+    def transform(self, _input_cdf):
+        df = cudf.read_csv(self.file_path).to_pandas()
+
+        df["customer_id"] = customer_hex_id_to_int(df["customer_id"])
+        df["prediction"] = df["prediction"].progress_apply(self.split)
+
+        df = df.explode("prediction").dropna().reset_index(drop=True)
+        df["prediction"] = df["prediction"].astype(int)
+        df.columns = [self.key_col, self.item_col]
+        df = df[df["customer_id"].isin(self.target_customers)]
+
+        self.out_cdf = to_cdf(df)
+        out_dic = self.cdf2dic(self.out_cdf, self.key_col, self.item_col)
+
+        return out_dic
+
+    @staticmethod
+    def split(x):
+        if type(x) is str:
+            return x.split(" ")
+        else:
+            return []
 
 
 class ArticlesSimilartoThoseUsersHavePurchased(AbstractCGBlock):

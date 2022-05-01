@@ -10,7 +10,7 @@ def visualize_importance(models, feat_train_df):
         _df = pd.DataFrame()
         try:
             fe = model.feature_importance()
-        except :
+        except:
             fe = model.feature_importances_
 
         _df["feature_importance"] = fe
