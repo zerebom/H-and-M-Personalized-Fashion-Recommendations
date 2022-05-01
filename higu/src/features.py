@@ -234,6 +234,30 @@ class RepeatSalesCustomerNum5Block(AbstractBaseBlock):
         repeat_num["repeat_sales_num"] = repeat_num.groupby("article_id")["count"].cumsum()
         return repeat_num
 
+class RepeatCustomerBlock(AbstractBaseBlock):
+    def __init__(self, key_col):
+        self.key_col = key_col
+        
+    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):  
+        trans_cdf = trans_cdf.copy()
+        t_dat_df = self.preprocess(trans_cdf)        
+        
+        # TODO : 他にも活かし方あるかも？
+        repeat_customer_cdf = t_dat_df.groupby("customer_id")["repeat_flg"].agg(["sum","mean"]).reset_index()
+        repeat_customer_cdf.columns = ["customer_id", "cust_repeat_sum", "cust_repeat_mean"]
+              
+        return repeat_customer_cdf 
+    
+    def preprocess(self, trans_cdf):
+        trans_cdf["t_dat_datetime"] = pd.to_datetime(trans_cdf["t_dat"].to_array())
+        # customerがある商品をどれくらいの頻度で買うか
+        t_dat_cdf = trans_cdf.sort_values(['customer_id','article_id',col]).drop_duplicates(subset=['customer_id','article_id',col],keep='first')[['customer_id','article_id',col]].reset_index()
+        t_dat_df = t_dat_cdf.to_pandas()
+        t_dat_df["shift_t_dat_datetime"] = t_dat_df.groupby(["customer_id","article_id"])[col].shift(1)
+        t_dat_df["day_diff"] = (t_dat_df["t_dat_datetime"] - t_dat_df["shift_t_dat_datetime"] ).dt.days
+        t_dat_df["repeat_flg"] = 1 - t_dat_df["shift_t_dat_datetime"].isna().astype(int)
+        return t_dat_df
+
 class ArticleBiasIndicatorBlock(AbstractBaseBlock):
     """
     その商品を買う人に偏りがあるのかどうかといった指標
@@ -252,7 +276,7 @@ class ArticleBiasIndicatorBlock(AbstractBaseBlock):
         bias_cdf["sales_by_buy_users"] = bias_cdf["sales"] / bias_cdf["nunique_customers"] # その商品購入する人たちの中ではどれくらい買われるか？
         out_cdf = bias_cdf[["article_id", "sales_by_buy_users", "nunique_customers"]]
         return out_cdf
-        
+
 
 class SalesPerDayBlock(AbstractBaseBlock):
     def __init__(self, key_col, agg_list):
