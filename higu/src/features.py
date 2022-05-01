@@ -204,7 +204,7 @@ class SexCustomerBlock(AbstractBaseBlock):
         )
         return trans
 
-class RepeatSalesCustomerNum5(AbstractBaseBlock):
+class RepeatSalesCustomerNum5Block(AbstractBaseBlock):
     # 一旦2-5を出そう
     # TODO: ハードコーディング部分を直す？考える
     def __init__(self, key_col):
@@ -232,7 +232,7 @@ class RepeatSalesCustomerNum5(AbstractBaseBlock):
         repeat_num["repeat_sales_num"] = repeat_num.groupby("article_id")["count"].cumsum()
         return repeat_num
 
-class SalesPerDay(AbstractBaseBlock):
+class SalesPerDayBlock(AbstractBaseBlock):
     def __init__(self, key_col, agg_list):
         self.key_col = key_col
         self.agg_list = agg_list
@@ -316,7 +316,7 @@ class PostalCodeBlock(AbstractBaseBlock):
         return most_popular_article_cdf
 
 
-class MaxSales(AbstractBaseBlock):
+class MaxSalesBlock(AbstractBaseBlock):
     def __init__(self, key_col, groupby_cols_dict):
         self.key_col = key_col
         self.groupby_cols_dict = groupby_cols_dict
