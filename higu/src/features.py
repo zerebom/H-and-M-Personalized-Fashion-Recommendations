@@ -259,9 +259,6 @@ class PostalCodeBlock(AbstractBaseBlock):
         self.agg_cust_cols = agg_cust_cols
         self.agg_trans_cols = agg_trans_cols
         self.agg_list = agg_list
-        
-    def fit(self, input_cdf: cudf.DataFrame, customer_cdf_add_sex: cudf.DataFrame):
-        return self.transform(input_cdf, customer_cdf_add_sex)
     
     def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
         # 準備としてtransにpostal codeをjoinさせる
