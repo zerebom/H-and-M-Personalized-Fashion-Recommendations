@@ -2,6 +2,8 @@ import cudf
 import pandas as pd
 import numpy as np
 from lifetimes.utils import summary_data_from_transaction_data
+from datetime import date, time
+
 
 
 to_cdf = cudf.DataFrame.from_pandas
@@ -347,6 +349,22 @@ class SalesPerTimesInfBlock(AbstractBaseBlock):
         sales_cdf.columns = ["article_id"] +  [f"sales_{groupby_name}_{i}" for i in agg_list]
         return sales_cdf
 
+class FirstBuyDateBlock(AbstractBaseBlock):
+    def __init__(self, key_col, end_date):
+        self.key_col = key_col
+        self.end_date = end_date
+        
+    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):   
+        end_date_datetime = dt.strptime(self.end_date, '%Y-%m-%d')
+        
+        # 初日を出す
+        date_item_first_purchased = trans_cdf.groupby("article_id")["t_dat"].min().reset_index()
+        date_item_first_purchased.columns = ["article_id", "first_purchased_day"]
+        date_item_first_purchased["first_purchased_day"] = pd.to_datetime(date_item_first_purchased["first_purchased_day"].to_array())
+        
+        date_item_first_purchased["days_from_first_purchased"] = (end_date_datetime - date_item_first_purchased["first_purchased_day"]).dt.days
+        
+        return date_item_first_purchased 
 
 class MostFreqBuyDayofWeekBlock(AbstractBaseBlock):
     def __init__(self, key_col):
