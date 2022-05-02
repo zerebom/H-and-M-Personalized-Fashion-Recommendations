@@ -303,7 +303,8 @@ class SalesPerDayCustomerBlock(AbstractBaseBlock):
     def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
         trans_sales_cdf = self.sales_day(trans_cdf)
         out_cdf = trans_sales_cdf.groupby("customer_id")["all_sales_per_day"].agg(self.agg_list).reset_index()
-        out_cdf.columns = ["customer_id"] + [f"sales_in_day_{col}" for col in out_cdf.columns]
+        out_cdf.columns = ["customer_id"] + [f"sales_in_day_{col}" for col in out_cdf.columns[1:]] # 1列目はcustomer_id
+        
         return out_cdf 
 
     def sales_day(self, trans_cdf):
@@ -324,14 +325,14 @@ class RepeatCustomerBlock(AbstractBaseBlock):
         t_dat_df = self.preprocess(trans_cdf)        
         
         # TODO : 他にも活かし方あるかも？
-        repeat_customer_cdf = t_dat_df.groupby("customer_id")["repeat_flg"].agg(["sum","mean"]).reset_index()
-        repeat_customer_cdf.columns = ["customer_id", "cust_repeat_sum", "cust_repeat_mean"]
-              
+        repeat_customer_df = t_dat_df.groupby("customer_id")["repeat_flg"].agg(["sum","mean"]).reset_index()
+        repeat_customer_df.columns = ["customer_id", "cust_repeat_sum", "cust_repeat_mean"]
+        repeat_customer_cdf = cudf.from_pandas(repeat_customer_df)
         return repeat_customer_cdf 
     
     def preprocess(self, trans_cdf):
         trans_cdf["t_dat_datetime"] = pd.to_datetime(trans_cdf["t_dat"].to_array())
-        # customerがある商品をどれくらいの頻度で買うか
+        # customerがある商品をどれくらいの頻度で買うか, 当日の場合はリピ買いと判定しない
         t_dat_cdf = trans_cdf.sort_values(['customer_id','article_id','t_dat_datetime']).drop_duplicates(subset=['customer_id','article_id','t_dat_datetime'],keep='first')[['customer_id','article_id','t_dat_datetime']].reset_index()
         t_dat_df = t_dat_cdf.to_pandas()
         t_dat_df["shift_t_dat_datetime"] = t_dat_df.groupby(["customer_id","article_id"])['t_dat_datetime'].shift(1)
