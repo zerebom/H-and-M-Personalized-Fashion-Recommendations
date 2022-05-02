@@ -232,18 +232,18 @@ class SexArticleBlock(AbstractBaseBlock):
 
 class SexCustomerBlock(AbstractBaseBlock):
     # その人の性別が何であるかを判断する
-    def __init__(self, key_col):
+    def __init__(self, key_col, use_cache):
+        super().__init__(use_cache)
+        self.use_cache = use_cache
         self.key_col = key_col
 
-    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
+    def transform(
+        self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week
+    ):
 
-        # art_cdfに入っているなら、それを呼び出す
-        if "men_flg" in art_cdf:
-            articles_sex_cdf = art_cdf[["article_id", "women_flg", "men_flg"]].copy()
-        else:
-            sex_article = SexArticleBlock("article_id")
+        sex_article = SexArticleBlock("article_id", self.use_cache)
             articles_sex_cdf = sex_article.transform(
-                trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger
+            trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week
             )
 
         out_cdf = self.make_customer_sex_info(articles_sex_cdf, trans_cdf)
