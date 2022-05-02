@@ -15,11 +15,41 @@ to_cdf = cudf.DataFrame.from_pandas
 
 
 class AbstractBaseBlock:
-    def fit(self, trans_cdf, art_cdf, cust_cdf, logger, y_cdf, target_customers) -> cudf.DataFrame:
-        return self.transform(trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger)
+    def __init__(self, use_cache):
+        self.use_cache = use_cache
+        self.name = self.__class__.__name__
+        self.cache_dir = Path("/home/kokoro/h_and_m/higu/input/features")
+
+    def fit(
+        self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week
+    ) -> cudf.DataFrame:
+        file_name = self.cache_dir / f"{self.name}_{target_week}.pkl"
+
+        # キャッシュを使う & ファイルがあるなら読み出し
+        if os.path.isfile(str(file_name)) and self.use_cache:
+            with open(file_name, "rb") as f:
+                feature = pickle.load(f)
+            return feature
+        # そうでないならtransform実行 & ファイル保存
+        else:
+            feature = self.transform(
+                trans_cdf,
+                art_cdf,
+                cust_cdf,
+                base_cdf,
+                y_cdf,
+                target_customers,
+                logger,
+                target_week,
+            )
+
+            with open(file_name, "wb") as f:
+                pickle.dump(feature, f)
+
+            return feature
 
     def transform(
-        self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger
+        self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week
     ) -> cudf.DataFrame:
         raise NotImplementedError()
 
@@ -29,12 +59,17 @@ class EmbBlock(AbstractBaseBlock):
     {hoge_id:[List[int]],...}形式のdictをcudfに変換する
     """
 
-    def __init__(self, key_col, emb_dic, prefix):
+    def __init__(self, key_col, emb_dic, prefix, use_cache):
+        super().__init__(use_cache)
+        self.name = self.name + "_" + self.prefix
+
         self.key_col = key_col
         self.emb_dic = emb_dic
         self.prefix = prefix
 
-    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
+    def transform(
+        self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week
+    ):
         out_cdf = cudf.DataFrame(self.emb_dic).T
         out_cdf.columns = [f"{self.prefix}_{col}_emb" for col in out_cdf.columns]
         out_cdf = out_cdf.reset_index().rename({"index": self.key_col}, axis=1)
@@ -44,14 +79,18 @@ class EmbBlock(AbstractBaseBlock):
 
 
 class TargetEncodingBlock(AbstractBaseBlock):
-    def __init__(self, key_col, join_col, target_col, agg_list):
-
+    def __init__(self, key_col, join_col, target_col, agg_list, use_cache):
+        super().__init__(use_cache)
         self.key_col = key_col  # 集約単位のkey
         self.join_col = join_col  # target_colを保持するdfのkey
         self.target_col = target_col
         self.agg_list = agg_list
 
-    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
+        self.name = self.name + "_" + self.target_col
+
+    def transform(
+        self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week
+    ):
         if self.join_col == "article_id":
             input_cdf = trans_cdf.merge(art_cdf[[self.join_col, self.target_col]])
         elif self.join_col == "customer_id":
@@ -122,12 +161,14 @@ class ModeCategoryBlock(AbstractBaseBlock):
 
 
 class LifetimesBlock(AbstractBaseBlock):
-    def __init__(self, key_col, target_col):
-
+    def __init__(self, key_col, target_col, use_cache):
+        super().__init__(use_cache)
         self.key_col = key_col  # 'customer_id'
         self.target_col = target_col  # 'price'
 
-    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
+    def transform(
+        self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week
+    ):
         price_mean_cust_dat = (
             trans_cdf.groupby([self.key_col, "t_dat"])[self.target_col]
             .sum()
