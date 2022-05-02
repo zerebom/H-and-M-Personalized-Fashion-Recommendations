@@ -68,16 +68,14 @@ class AbstractCGBlock:
             pos_in_cg_cnt = len(merged_cdf)
             candidate_cnt = len(self.out_cdf)
 
-            pos_ratio = round(pos_in_cg_cnt / candidate_cnt, 3)
-            pos_coverage = round(pos_in_cg_cnt / all_pos_cnt, 3)
+            pos_ratio = pos_in_cg_cnt / candidate_cnt
+            pos_coverage = pos_in_cg_cnt / all_pos_cnt
 
-            logger.info(
-                f"""
-                候補集合内の正例率: {100*pos_ratio}%({pos_in_cg_cnt}/{candidate_cnt})
-                正例カバレッジ率: {100*pos_coverage}%({pos_in_cg_cnt}/{all_pos_cnt})
-                """
-            )
-            logger.info(f"uniques(customer:{customer_cnt}, article: {article_cnt})")
+            # logger.info(f" ")
+            logger.info(f"候補集合内の正例率: {round(100*pos_ratio, 3)}%({pos_in_cg_cnt}/{candidate_cnt})")
+            logger.info(f"正例カバレッジ率: {round(100*pos_coverage,2)}%({pos_in_cg_cnt}/{all_pos_cnt})")
+            logger.info(f"ユニーク数: (customer:{customer_cnt}, article: {article_cnt})")
+            # logger.info(" ")
         else:
             logger.info("either y_cdf or out_cdf isn't defined. so skip cg block inspection.")
 
