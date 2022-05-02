@@ -9,6 +9,7 @@ output/
 
 # C extensions
 *.so
+*.csv
 
 # Distribution / packaging
 .Python

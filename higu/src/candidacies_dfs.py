@@ -1,24 +1,51 @@
 from typing import Any, Dict, List, Optional, Tuple
 
+from pathlib import Path
+import os
+import pickle
+from collections import defaultdict
 import cudf
 import nmslib
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from utils import customer_hex_id_to_int
 import itertools
 
 to_cdf = cudf.DataFrame.from_pandas
 
 
 class AbstractCGBlock:
-    def fit(self, trans_cdf, art_cdf, cust_cdf, logger, y_cdf, target_customers) -> pd.DataFrame:
+    def __init__(self, use_cache):
+        self.use_cache = use_cache
+        self.name = self.__class__.__name__
+        self.cache_dir = Path("/home/kokoro/h_and_m/higu/input/candidates")
 
+    def fit(
+        self, trans_cdf, art_cdf, cust_cdf, logger, y_cdf, target_customers, target_week
+    ) -> pd.DataFrame:
+
+        file_name = self.cache_dir / f"{self.name}_{target_week}.pkl"
+
+        if os.path.isfile(str(file_name)) and self.use_cache:
+            with open(file_name, "rb") as f:
+                self.out_cdf = pickle.load(f)
+        else:
         self.out_cdf = self.transform(trans_cdf, art_cdf, cust_cdf, target_customers)
         self.out_cdf["candidate_block_name"] = self.__class__.__name__
         self.out_cdf["candidate_block_name"] = self.out_cdf["candidate_block_name"].astype(
             "category"
         )
+
+            with open(file_name, "wb") as f:
+                pickle.dump(self.out_cdf, f)
+
+        if y_cdf is not None:
+            self.out_cdf = self.out_cdf.merge(y_cdf, how="left", on=["customer_id", "article_id"])
+            self.out_cdf["y"] = self.out_cdf["y"].fillna(0).astype(int)
+            self.out_cdf = self.out_cdf.drop_duplicates(
+                subset=["customer_id", "article_id", "y"]
+            ).reset_index(drop=True)
+
         self.inspect(y_cdf, logger)
         out_df = self.out_cdf.to_pandas()
         return out_df
@@ -44,16 +71,14 @@ class AbstractCGBlock:
             pos_in_cg_cnt = len(merged_cdf)
             candidate_cnt = len(self.out_cdf)
 
-            pos_ratio = round(pos_in_cg_cnt / candidate_cnt, 3)
-            pos_coverage = round(pos_in_cg_cnt / all_pos_cnt, 3)
+            pos_ratio = pos_in_cg_cnt / candidate_cnt
+            pos_coverage = pos_in_cg_cnt / all_pos_cnt
 
-            logger.info(
-                f"""
-                候補集合内の正例率: {100*pos_ratio}%({pos_in_cg_cnt}/{candidate_cnt})
-                正例カバレッジ率: {100*pos_coverage}%({pos_in_cg_cnt}/{all_pos_cnt})
-                """
-            )
-            logger.info(f"uniques(customer:{customer_cnt}, article: {article_cnt})")
+            # logger.info(f" ")
+            logger.info(f"候補集合内の正例率: {round(100*pos_ratio, 3)}%({pos_in_cg_cnt}/{candidate_cnt})")
+            logger.info(f"正例カバレッジ率: {round(100*pos_coverage,2)}%({pos_in_cg_cnt}/{all_pos_cnt})")
+            logger.info(f"ユニーク数: (customer:{customer_cnt}, article: {article_cnt})")
+            # logger.info(" ")
         else:
             logger.info("either y_cdf or out_cdf isn't defined. so skip cg block inspection.")
 
@@ -63,11 +88,13 @@ class LastNWeekArticles(AbstractCGBlock):
     各ユーザごとに最終購買週からn週間前までの購入商品を取得する
     """
 
-    def __init__(self, key_col="customer_id", item_col="article_id", n_weeks=2):
+    def __init__(self, key_col="customer_id", item_col="article_id", n_weeks=2, use_cache=True):
+        super().__init__(use_cache)
         self.key_col = key_col
         self.item_col = item_col
         self.n_weeks = n_weeks
         self.out_keys = [key_col, item_col]
+        self.name = self.name + "_" + str(self.n_weeks)
 
     def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
         input_cdf = trans_cdf.copy()
@@ -93,11 +120,14 @@ class LastBoughtNArticles(AbstractCGBlock):
     各ユーザごとに直近の購入商品N個を取得する
     """
 
-    def __init__(self, n, key_col="customer_id", item_col="article_id"):
+    def __init__(self, n, key_col="customer_id", item_col="article_id", use_cache=True):
+        super().__init__(use_cache)
         self.key_col = key_col
         self.item_col = item_col
         self.n = n
         self.out_keys = [key_col, item_col]
+
+        self.name = self.name + "_" + str(self.n)
 
     def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
         input_df = trans_cdf[self.out_keys].to_pandas()
@@ -110,10 +140,12 @@ class PopularItemsoftheLastWeeks(AbstractCGBlock):
     最終購入週の人気アイテムtopNを返す
     """
 
-    def __init__(self, key_col="customer_id", item_col="article_id", n=12):
+    def __init__(self, key_col="customer_id", item_col="article_id", n=12, use_cache=True):
+        super().__init__(use_cache)
         self.key_col = key_col
         self.item_col = item_col
         self.n = n
+        self.name = self.name + "_" + str(self.n)
 
     def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
         input_cdf = trans_cdf.copy()
@@ -121,7 +153,7 @@ class PopularItemsoftheLastWeeks(AbstractCGBlock):
         input_last_week_cdf = input_cdf.loc[input_cdf["week"] == last_week]
 
         TopN_articles = list(
-            input_last_week_cdf["article_id"].value_counts().tail(self.n).to_pandas().index
+            input_last_week_cdf["article_id"].value_counts().head(self.n).to_pandas().index
         )
 
         if target_customers is None:
@@ -140,15 +172,19 @@ class PairsWithLastBoughtNArticles(AbstractCGBlock):
     各ユーザごとに直近の購入商品N個を取得する
     """
 
-    def __init__(self, n, key_col="customer_id", item_col="article_id"):
+    def __init__(self, n, key_col="customer_id", item_col="article_id", use_cache=True):
+        super().__init__(use_cache)
         self.key_col = key_col
         self.item_col = item_col
         self.n = n
         self.out_keys = [key_col, item_col]
+        self.name = self.name + "_" + str(self.n)
 
     def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
-        #from: https://www.kaggle.com/code/zerebom/article-id-pairs-in-3s-using-cudf/edit
-        pair_df = cudf.read_csv("/home/kokoro/h_and_m/higu/input/pair_df.csv")[["article_id", "pair"]]
+        # from: https://www.kaggle.com/code/zerebom/article-id-pairs-in-3s-using-cudf/edit
+        pair_df = cudf.read_csv("/home/kokoro/h_and_m/higu/input/pair_df.csv")[
+            ["article_id", "pair"]
+        ]
 
         self.out_cdf = to_cdf(
             trans_cdf.to_pandas()
