@@ -414,8 +414,8 @@ class CustomerBuyIntervalBlock(AbstractBaseBlock):
         return t_dat_df
     
     def interval_describe(self, t_dat_df):
-        day_diff_describe = t_dat_df.groupby("customer_id")["day_diff"].agg(agg_list).reset_index()
-        day_diff_describe.columns = ["customer_id"] + [f"buy_interval_{i}" for i in agg_list]
+        day_diff_describe = t_dat_df.groupby("customer_id")["day_diff"].agg(self.agg_list).reset_index()
+        day_diff_describe.columns = ["customer_id"] + [f"buy_interval_{i}" for i in self.agg_list]
         return day_diff_describe
 
 
