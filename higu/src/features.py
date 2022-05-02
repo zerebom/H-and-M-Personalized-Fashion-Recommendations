@@ -260,3 +260,100 @@ class SexCustomerBlock(AbstractBaseBlock):
             .rename(columns=rename_dict)
         )
         return trans
+
+
+class Dis2HistoryAveVecAndArtVec(AbstractBaseBlock):
+    # 購買履歴の平均ベクトルと商品ベクトルの距離
+    def __init__(self, key_col, art_emb_dic, prefix, use_cache):
+        self.key_col = key_col
+        self.art_emb_dic = art_emb_dic
+        super().__init__(use_cache)
+        self.name = self.name + "_" + prefix
+
+        # 一度に平均ベクトルを求めるカスタマー数
+        self.ave_vec_batch_size = 100_000
+
+        # 一度に類似度を求めるトランザクション数
+        self.cos_sim_batch_size = 10_000_000
+        self.emb_dim = 20
+        self.prefix = prefix
+
+        # ベクトルをカラムにもったcdf
+        self.article_emb_cdf = (
+            cudf.DataFrame(self.art_emb_dic)
+            .T.reset_index()
+            .rename({"index": "article_id"}, axis=1)
+        )
+
+    def transform(
+        self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week
+    ):
+        if base_cdf is None:
+            return cudf.DataFrame()
+
+        out_cdf = base_cdf[["article_id", "customer_id"]].copy()
+        logger.info("start make ave vec")
+        history_ave_vec_dic = self.make_history_ave_vec_dic(trans_cdf)
+
+        logger.info("calc cos sim")
+        col = f"sim_{self.prefix}"
+        out_cdf[col] = self.calc_cos_sim(base_cdf, history_ave_vec_dic, self.art_emb_dic)
+
+        out_cdf[col] = out_cdf[col].fillna(out_cdf[col].mean().astype(out_cdf[col].dtype))
+        out_cdf = out_cdf.drop_duplicates(subset=["article_id", "customer_id"]).reset_index(
+            drop=True
+        )
+        logger.info(out_cdf.shape)
+        logger.info(out_cdf.isnull().sum())
+        return out_cdf
+
+    def calc_cos_sim(self, base_cdf, ave_vec_dic, art_emb_dic):
+        all_arts = base_cdf["article_id"].to_pandas().values
+        all_custs = base_cdf["customer_id"].to_pandas().values
+        ave_vec_dic = defaultdict(lambda: np.zeros(self.emb_dim), ave_vec_dic)
+        art_emb_dic = defaultdict(lambda: np.zeros(self.emb_dim), art_emb_dic)
+
+        sim_list = []
+        for i in tqdm(range(0, len(all_arts), self.cos_sim_batch_size)):
+            arts = all_arts[i : i + self.cos_sim_batch_size]
+            custs = all_custs[i : i + self.cos_sim_batch_size]
+
+            # 辞書からのfetchが遅そう
+            art_tensor = torch.Tensor([art_emb_dic[art_idx] for art_idx in arts])
+            cust_tensor = torch.Tensor([ave_vec_dic[cust_idx] for cust_idx in custs])
+            cos = nn.CosineSimilarity(dim=1, eps=1e-6)
+            sim = cos(art_tensor, cust_tensor)
+            sim_list.extend(list(np.array(sim)))
+
+        sim_list = list(np.where(np.array(sim_list) < 0.2, np.nan, np.array(sim_list)))
+
+        print(len(sim_list), len(all_arts), base_cdf.shape)
+        return sim_list
+
+    def make_history_ave_vec_dic(self, trans_cdf):
+        # trans_cdfから平均ベクトルを計算し、{customer_id: [emb]}の辞書に詰める
+
+        cust_ids = trans_cdf["customer_id"].to_pandas().unique()
+        all_cust_cnt = len(cust_ids)
+        history_ave_vec_arr = np.empty((all_cust_cnt, self.emb_dim))
+
+        trans_w_art_emb_cdf = trans_cdf[["customer_id", "article_id"]].merge(
+            self.article_emb_cdf, how="left", on="article_id"
+        )
+
+        for i in tqdm(range(0, all_cust_cnt, self.ave_vec_batch_size)):
+            sample_ids = cust_ids[i : i + self.ave_vec_batch_size]
+            history_ave_vec_arr[i : i + self.ave_vec_batch_size] = (
+                trans_w_art_emb_cdf[trans_w_art_emb_cdf["customer_id"].isin(sample_ids)]
+                .drop(columns="article_id")
+                .groupby("customer_id")
+                .mean()
+                .to_pandas()
+                .values
+            )
+
+        history_ave_vec_dic = {}
+        for idx, cust_id in enumerate(cust_ids):
+            history_ave_vec_dic[cust_id] = history_ave_vec_arr[idx]
+
+        return history_ave_vec_dic
