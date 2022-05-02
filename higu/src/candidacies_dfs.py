@@ -12,13 +12,37 @@ to_cdf = cudf.DataFrame.from_pandas
 
 
 class AbstractCGBlock:
-    def fit(self, trans_cdf, art_cdf, cust_cdf, logger, y_cdf, target_customers) -> pd.DataFrame:
+    def __init__(self, use_cache):
+        self.use_cache = use_cache
+        self.name = self.__class__.__name__
+        self.cache_dir = Path("/home/kokoro/h_and_m/higu/input/candidates")
 
+    def fit(
+        self, trans_cdf, art_cdf, cust_cdf, logger, y_cdf, target_customers, target_week
+    ) -> pd.DataFrame:
+
+        file_name = self.cache_dir / f"{self.name}_{target_week}.pkl"
+
+        if os.path.isfile(str(file_name)) and self.use_cache:
+            with open(file_name, "rb") as f:
+                self.out_cdf = pickle.load(f)
+        else:
         self.out_cdf = self.transform(trans_cdf, art_cdf, cust_cdf, target_customers)
         self.out_cdf["candidate_block_name"] = self.__class__.__name__
         self.out_cdf["candidate_block_name"] = self.out_cdf["candidate_block_name"].astype(
             "category"
         )
+
+            with open(file_name, "wb") as f:
+                pickle.dump(self.out_cdf, f)
+
+        if y_cdf is not None:
+            self.out_cdf = self.out_cdf.merge(y_cdf, how="left", on=["customer_id", "article_id"])
+            self.out_cdf["y"] = self.out_cdf["y"].fillna(0).astype(int)
+            self.out_cdf = self.out_cdf.drop_duplicates(
+                subset=["customer_id", "article_id", "y"]
+            ).reset_index(drop=True)
+
         self.inspect(y_cdf, logger)
         out_df = self.out_cdf.to_pandas()
         return out_df
