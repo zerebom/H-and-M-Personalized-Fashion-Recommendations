@@ -146,6 +146,12 @@ class SexArticleBlock(AbstractBaseBlock):
         self.key_col = key_col
 
     def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
+        cols = ["article_id", "index_name", "index_group_name", "section_name"]
+        art_cdf = cudf.read_csv(
+            "/home/kokoro/h_and_m/higu/input/articles.csv",
+            header=0,
+            usecols=cols
+        )
         women_regexp = "women|girl|ladies"
         men_regexp = "boy|men"  # womenが含まれてしまうのであとで処理する
         df = self.make_article_sex_info(art_cdf, women_regexp, men_regexp)
@@ -185,8 +191,15 @@ class SexCustomerBlock(AbstractBaseBlock):
             articles_sex_cdf = art_cdf[["article_id", "women_flg", "men_flg"]].copy()
         else:
             sex_article = SexArticleBlock("article_id")
+            # csvを読み込みたい
+            cols = ["article_id", "index_name", "index_group_name", "section_name"]
+            art_cdf_from_csv = cudf.read_csv(
+                "/home/kokoro/h_and_m/higu/input/articles.csv",
+                header=0,
+                usecols=cols
+            )
             articles_sex_cdf = sex_article.transform(
-                trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger
+                trans_cdf, art_cdf_from_csv, cust_cdf, y_cdf, target_customers, logger
             )
 
         out_cdf = self.make_customer_sex_info(articles_sex_cdf, trans_cdf)
