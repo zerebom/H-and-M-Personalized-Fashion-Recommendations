@@ -124,7 +124,7 @@ class SexArticleBlock(AbstractBaseBlock):
     def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
         cols = ["article_id", "index_name", "index_group_name", "section_name"]
         art_cdf = cudf.read_csv(
-            "../input/h-and-m-personalized-fashion-recommendations/articles.csv", #← kaggle notebookの時はこちら #"/home/kokoro/h_and_m/higu/input/articles.csv",
+            "/home/kokoro/h_and_m/higu/input/articles.csv", #kaggle notebookの時は"../input/h-and-m-personalized-fashion-recommendations/articles.csv", 
             header=0,
             usecols=cols
         )
@@ -170,14 +170,13 @@ class SexCustomerBlock(AbstractBaseBlock):
             # csvを読み込みたい
             cols = ["article_id", "index_name", "index_group_name", "section_name"]
             art_cdf_from_csv = cudf.read_csv(
-                "../input/h-and-m-personalized-fashion-recommendations/articles.csv", #← kaggle notebookの時はこちら #"/home/kokoro/h_and_m/higu/input/articles.csv",
+                "/home/kokoro/h_and_m/higu/input/articles.csv", #kaggle notebookの時は"../input/h-and-m-personalized-fashion-recommendations/articles.csv", 
                 header=0,
                 usecols=cols
             )
             articles_sex_cdf = sex_article.transform(
                 trans_cdf, art_cdf_from_csv, cust_cdf, y_cdf, target_customers, logger
             )
-
         out_cdf = self.make_customer_sex_info(articles_sex_cdf, trans_cdf)
         return out_cdf
 
