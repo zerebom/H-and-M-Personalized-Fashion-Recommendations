@@ -2,7 +2,7 @@ import cudf
 import pandas as pd
 import numpy as np
 from lifetimes.utils import summary_data_from_transaction_data
-from datetime import date, time
+from datetime import date
 
 
 
@@ -248,7 +248,7 @@ class FirstBuyDateBlock(AbstractBaseBlock):
         self.end_date = end_date
         
     def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):   
-        end_date_datetime = dt.strptime(self.end_date, '%Y-%m-%d')
+        end_date_datetime = datetime.strptime(self.end_date, '%Y-%m-%d')
         
         # 初日を出す
         date_item_first_purchased = trans_cdf.groupby("article_id")["t_dat"].min().reset_index()
