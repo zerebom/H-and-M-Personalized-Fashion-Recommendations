@@ -290,7 +290,7 @@ class SalesPerTimesForArticleBlock(AbstractBaseBlock):
         sales_by_groupby_cols.columns = groupby_cols + ["sales"]
 
         sales_cdf = sales_by_groupby_cols.groupby("article_id")["sales"].agg(self.agg_list).reset_index()
-        sales_cdf.columns = ["article_id"] +  [f"sales_{groupby_name}_{i}" for i in agg_list]
+        sales_cdf.columns = ["article_id"] +  [f"sales_{groupby_name}_{i}" for i in self.agg_list]
         return sales_cdf
 
 
