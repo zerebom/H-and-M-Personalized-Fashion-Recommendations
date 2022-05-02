@@ -117,21 +117,19 @@ class ModeCategoryBlock(AbstractBaseBlock):
 
 
 class LifetimesBlock(AbstractBaseBlock):
-    def __init__(self, key_col, target_col):
-
+    def __init__(self, key_col):
         self.key_col = key_col  # 'customer_id'
-        self.target_col = target_col  # 'price'
 
     def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
         price_mean_cust_dat = (
-            trans_cdf.groupby([self.key_col, "t_dat"])[self.target_col]
+            trans_cdf.groupby(["customer_id", "t_dat"])["price"]
             .sum()
             .reset_index()
             .to_pandas()
         )
         out_df = summary_data_from_transaction_data(
             price_mean_cust_dat,
-            self.key_col,
+            "customer_id",
             "t_dat",
             observation_period_end=price_mean_cust_dat.t_dat.max(),  # train:2020-09-08, valid: 2020-09-15 , test: 2020-09-22
         ).reset_index()
