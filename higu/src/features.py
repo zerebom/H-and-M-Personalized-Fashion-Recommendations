@@ -302,9 +302,8 @@ class SalesPerDayCustomerBlock(AbstractBaseBlock):
     
     def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
         trans_sales_cdf = self.sales_day(trans_cdf)
-        out_cdf = trans_sales_cdf.groupby("customer_id")["all_sales_per_day"].agg(self.agg_list)
-        out_cdf.columns = [f"sales_in_day_{col}" for col in out_cdf.columns]
-        out_cdf.reset_index(inplace=True)
+        out_cdf = trans_sales_cdf.groupby("customer_id")["all_sales_per_day"].agg(self.agg_list).reset_index()
+        out_cdf.columns = ["customer_id"] + [f"sales_in_day_{col}" for col in out_cdf.columns]
         return out_cdf 
 
     def sales_day(self, trans_cdf):
@@ -370,6 +369,7 @@ class MostFreqBuyDayofWeekBlock(AbstractBaseBlock):
         
     def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
         trans_cdf = trans_cdf.copy() # 直接変更しないようにする
+        trans_cdf["t_dat_datetime"] = pd.to_datetime(trans_cdf["t_dat"].to_array())
         trans_cdf["dayofweek"] = trans_cdf["t_dat_datetime"].dt.dayofweek # 月曜日が0, 日曜日が6 ref: https://pandas.pydata.org/docs/reference/api/pandas.Series.dt.dayofweek.html
         
         sales_by_dayofweek = trans_cdf.groupby(["customer_id", "dayofweek"]).size().reset_index()
@@ -387,7 +387,9 @@ class CustomerBuyIntervalBlock(AbstractBaseBlock):
         self.agg_list = agg_list
         
     def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
-        t_dat_df = self.make_day_diff(trans_cdf.copy()) # 直接変更しないようにする
+        trans_cdf = trans_cdf.copy() # 直接変更しないようにする
+        trans_cdf["t_dat_datetime"] = pd.to_datetime(trans_cdf["t_dat"].to_array())
+        t_dat_df = self.make_day_diff(trans_cdf) 
         
         # ここで連続するかどうか
         countinue_buy_df = self.continue_buy(t_dat_df)
