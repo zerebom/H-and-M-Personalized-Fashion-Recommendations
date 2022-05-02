@@ -270,10 +270,9 @@ class SalesPerTimesForArticleBlock(AbstractBaseBlock):
         trans_cdf = self.preprocess(trans_cdf.copy()) # 直接変更しないようにする
         
         out_cdf = art_cdf[["article_id"]].copy()     # 最初に紐づける先を用意する
-        
         for groupby_name, groupby_cols in self.groupby_cols_dict.items():
-            max_sales_cdf = self.max_sales(trans_cdf, groupby_name, groupby_cols)
-            out_cdf = out_cdf.merge(max_sales_cdf, on="article_id", how="left")           
+            sales_cdf = self.make_agg_sales(trans_cdf, groupby_name, groupby_cols)
+            out_cdf = out_cdf.merge(sales_cdf, on="article_id", how="left")           
         return out_cdf 
     
     def preprocess(self, trans_cdf: cudf.DataFrame):
@@ -285,7 +284,7 @@ class SalesPerTimesForArticleBlock(AbstractBaseBlock):
         trans_cdf["dayofweek"] = trans_cdf["t_dat_datetime"].dt.dayofweek # 月曜日が0, 日曜日が6 ref: https://pandas.pydata.org/docs/reference/api/pandas.Series.dt.dayofweek.html
         return trans_cdf
 
-    def max_sales(self, trans_cdf, groupby_name, groupby_cols):
+    def make_agg_sales(self, trans_cdf, groupby_name, groupby_cols):
         groupby_cols = groupby_cols + ["article_id"]
         sales_by_groupby_cols = trans_cdf.groupby(groupby_cols).size().reset_index()
         sales_by_groupby_cols.columns = groupby_cols + ["sales"]
