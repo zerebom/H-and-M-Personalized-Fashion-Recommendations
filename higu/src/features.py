@@ -333,9 +333,10 @@ class RepeatCustomerBlock(AbstractBaseBlock):
     def preprocess(self, trans_cdf):
         trans_cdf["t_dat_datetime"] = pd.to_datetime(trans_cdf["t_dat"].to_array())
         # customerがある商品をどれくらいの頻度で買うか
-        t_dat_cdf = trans_cdf.sort_values(['customer_id','article_id',col]).drop_duplicates(subset=['customer_id','article_id',col],keep='first')[['customer_id','article_id',col]].reset_index()
+
+        t_dat_cdf = trans_cdf.sort_values(['customer_id','article_id','t_dat_datetime']).drop_duplicates(subset=['customer_id','article_id',col],keep='first')[['customer_id','article_id',col]].reset_index()
         t_dat_df = t_dat_cdf.to_pandas()
-        t_dat_df["shift_t_dat_datetime"] = t_dat_df.groupby(["customer_id","article_id"])[col].shift(1)
+        t_dat_df["shift_t_dat_datetime"] = t_dat_df.groupby(["customer_id","article_id"])['t_dat_datetime'].shift(1)
         t_dat_df["day_diff"] = (t_dat_df["t_dat_datetime"] - t_dat_df["shift_t_dat_datetime"] ).dt.days
         t_dat_df["repeat_flg"] = 1 - t_dat_df["shift_t_dat_datetime"].isna().astype(int)
         return t_dat_df
