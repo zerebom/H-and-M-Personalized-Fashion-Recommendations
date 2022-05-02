@@ -61,8 +61,8 @@ class EmbBlock(AbstractBaseBlock):
 
     def __init__(self, key_col, emb_dic, prefix, use_cache):
         super().__init__(use_cache)
+        # prefixで中身も変わるので、ファイル名も変える
         self.name = self.name + "_" + self.prefix
-
         self.key_col = key_col
         self.emb_dic = emb_dic
         self.prefix = prefix
@@ -242,9 +242,9 @@ class SexCustomerBlock(AbstractBaseBlock):
     ):
 
         sex_article = SexArticleBlock("article_id", self.use_cache)
-            articles_sex_cdf = sex_article.transform(
+        articles_sex_cdf = sex_article.transform(
             trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week
-            )
+        )
 
         out_cdf = self.make_customer_sex_info(articles_sex_cdf, trans_cdf)
         return out_cdf
@@ -279,6 +279,7 @@ class Dis2HistoryAveVecAndArtVec(AbstractBaseBlock):
         self.prefix = prefix
 
         # ベクトルをカラムにもったcdf
+        # 割と重い & イミュータブルなので先に計算する
         self.article_emb_cdf = (
             cudf.DataFrame(self.art_emb_dic)
             .T.reset_index()
@@ -293,27 +294,33 @@ class Dis2HistoryAveVecAndArtVec(AbstractBaseBlock):
 
         out_cdf = base_cdf[["article_id", "customer_id"]].copy()
         logger.info("start make ave vec")
+        # 平均ベクトル計算
         history_ave_vec_dic = self.make_history_ave_vec_dic(trans_cdf)
 
-        logger.info("calc cos sim")
+        logger.info("calc cos sim") # cossim計算
         col = f"sim_{self.prefix}"
         out_cdf[col] = self.calc_cos_sim(base_cdf, history_ave_vec_dic, self.art_emb_dic)
 
+        # nullとduplicate除去
         out_cdf[col] = out_cdf[col].fillna(out_cdf[col].mean().astype(out_cdf[col].dtype))
         out_cdf = out_cdf.drop_duplicates(subset=["article_id", "customer_id"]).reset_index(
             drop=True
         )
-        logger.info(out_cdf.shape)
-        logger.info(out_cdf.isnull().sum())
         return out_cdf
 
     def calc_cos_sim(self, base_cdf, ave_vec_dic, art_emb_dic):
+        """
+        ユーザの平均ベクトルと、アーティクルのベクトルのコサイン類似度をGPUで計算する
+        """
+        # base_cdfに存在するペアに対して計算する
         all_arts = base_cdf["article_id"].to_pandas().values
         all_custs = base_cdf["customer_id"].to_pandas().values
+        # 未知のidが入ってきたら[0,0,...]を返す、
         ave_vec_dic = defaultdict(lambda: np.zeros(self.emb_dim), ave_vec_dic)
         art_emb_dic = defaultdict(lambda: np.zeros(self.emb_dim), art_emb_dic)
 
         sim_list = []
+        # 全部計算するとGPUのメモリエラーになるので、バッチで区切る
         for i in tqdm(range(0, len(all_arts), self.cos_sim_batch_size)):
             arts = all_arts[i : i + self.cos_sim_batch_size]
             custs = all_custs[i : i + self.cos_sim_batch_size]
@@ -325,6 +332,8 @@ class Dis2HistoryAveVecAndArtVec(AbstractBaseBlock):
             sim = cos(art_tensor, cust_tensor)
             sim_list.extend(list(np.array(sim)))
 
+        # 未知のidと計算して、類似度0になったやつをnp.nanに置換する
+        # もっといい方法があるかも
         sim_list = list(np.where(np.array(sim_list) < 0.2, np.nan, np.array(sim_list)))
 
         print(len(sim_list), len(all_arts), base_cdf.shape)
@@ -335,12 +344,17 @@ class Dis2HistoryAveVecAndArtVec(AbstractBaseBlock):
 
         cust_ids = trans_cdf["customer_id"].to_pandas().unique()
         all_cust_cnt = len(cust_ids)
+        # このarrに平均ベクトルを詰めて、後で辞書に変換する
         history_ave_vec_arr = np.empty((all_cust_cnt, self.emb_dim))
 
+        # cudfのカラムに各ベクトルの要素を列方向に詰める
         trans_w_art_emb_cdf = trans_cdf[["customer_id", "article_id"]].merge(
             self.article_emb_cdf, how="left", on="article_id"
         )
 
+        # cudfのgroup byを使って各ユーザの平均ベクトルを高速に計算する
+        # cudfのカラムに各ベクトルの要素を列方向に詰める
+        # 全部計算するとGPUのメモリエラーになるので、バッチで区切る
         for i in tqdm(range(0, all_cust_cnt, self.ave_vec_batch_size)):
             sample_ids = cust_ids[i : i + self.ave_vec_batch_size]
             history_ave_vec_arr[i : i + self.ave_vec_batch_size] = (
