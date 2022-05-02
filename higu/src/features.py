@@ -190,10 +190,18 @@ class LifetimesBlock(AbstractBaseBlock):
 # 性別
 class SexArticleBlock(AbstractBaseBlock):
     # その人の性別が何であるかを判断する
-    def __init__(self, key_col):
+    def __init__(self, key_col, use_cache):
+        super().__init__(use_cache)
         self.key_col = key_col
 
-    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
+    def transform(
+        self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week
+    ):
+
+        cols = ["article_id", "index_name", "index_group_name", "section_name"]
+        art_cdf = cudf.read_csv(
+            "/home/kokoro/h_and_m/higu/input/articles.csv", header=0, usecols=cols
+        )
         women_regexp = "women|girl|ladies"
         men_regexp = "boy|men"  # womenが含まれてしまうのであとで処理する
         df = self.make_article_sex_info(art_cdf, women_regexp, men_regexp)
