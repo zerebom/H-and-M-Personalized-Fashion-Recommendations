@@ -124,7 +124,7 @@ class SexArticleBlock(AbstractBaseBlock):
     def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
         cols = ["article_id", "index_name", "index_group_name", "section_name"]
         art_cdf = cudf.read_csv(
-            "/home/kokoro/h_and_m/higu/input/articles.csv",
+            "../input/h-and-m-personalized-fashion-recommendations/articles.csv", #← kaggle notebookの時はこちら #"/home/kokoro/h_and_m/higu/input/articles.csv",
             header=0,
             usecols=cols
         )
@@ -170,7 +170,7 @@ class SexCustomerBlock(AbstractBaseBlock):
             # csvを読み込みたい
             cols = ["article_id", "index_name", "index_group_name", "section_name"]
             art_cdf_from_csv = cudf.read_csv(
-                "/home/kokoro/h_and_m/higu/input/articles.csv",
+                "../input/h-and-m-personalized-fashion-recommendations/articles.csv", #← kaggle notebookの時はこちら #"/home/kokoro/h_and_m/higu/input/articles.csv",
                 header=0,
                 usecols=cols
             )
@@ -478,5 +478,3 @@ class PostalCodeBlock(AbstractBaseBlock):
         most_popular_article_cdf = popular_article_cdf.sort_values("sales_in_postal_code",ascending=False).drop_duplicates(subset=["postal_code"])[["postal_code","article_id"]]
         most_popular_article_cdf.columns = ["postal_code","most_popular_article_in_postal"]
         return most_popular_article_cdf
-
-
