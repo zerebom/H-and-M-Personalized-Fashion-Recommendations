@@ -85,11 +85,13 @@ class LastNWeekArticles(AbstractCGBlock):
     各ユーザごとに最終購買週からn週間前までの購入商品を取得する
     """
 
-    def __init__(self, key_col="customer_id", item_col="article_id", n_weeks=2):
+    def __init__(self, key_col="customer_id", item_col="article_id", n_weeks=2, use_cache=True):
+        super().__init__(use_cache)
         self.key_col = key_col
         self.item_col = item_col
         self.n_weeks = n_weeks
         self.out_keys = [key_col, item_col]
+        self.name = self.name + "_" + str(self.n_weeks)
 
     def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
         input_cdf = trans_cdf.copy()
@@ -115,11 +117,14 @@ class LastBoughtNArticles(AbstractCGBlock):
     各ユーザごとに直近の購入商品N個を取得する
     """
 
-    def __init__(self, n, key_col="customer_id", item_col="article_id"):
+    def __init__(self, n, key_col="customer_id", item_col="article_id", use_cache=True):
+        super().__init__(use_cache)
         self.key_col = key_col
         self.item_col = item_col
         self.n = n
         self.out_keys = [key_col, item_col]
+
+        self.name = self.name + "_" + str(self.n)
 
     def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
         input_df = trans_cdf[self.out_keys].to_pandas()
@@ -132,10 +137,12 @@ class PopularItemsoftheLastWeeks(AbstractCGBlock):
     最終購入週の人気アイテムtopNを返す
     """
 
-    def __init__(self, key_col="customer_id", item_col="article_id", n=12):
+    def __init__(self, key_col="customer_id", item_col="article_id", n=12, use_cache=True):
+        super().__init__(use_cache)
         self.key_col = key_col
         self.item_col = item_col
         self.n = n
+        self.name = self.name + "_" + str(self.n)
 
     def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
         input_cdf = trans_cdf.copy()
@@ -143,7 +150,7 @@ class PopularItemsoftheLastWeeks(AbstractCGBlock):
         input_last_week_cdf = input_cdf.loc[input_cdf["week"] == last_week]
 
         TopN_articles = list(
-            input_last_week_cdf["article_id"].value_counts().tail(self.n).to_pandas().index
+            input_last_week_cdf["article_id"].value_counts().head(self.n).to_pandas().index
         )
 
         if target_customers is None:
@@ -162,15 +169,19 @@ class PairsWithLastBoughtNArticles(AbstractCGBlock):
     各ユーザごとに直近の購入商品N個を取得する
     """
 
-    def __init__(self, n, key_col="customer_id", item_col="article_id"):
+    def __init__(self, n, key_col="customer_id", item_col="article_id", use_cache=True):
+        super().__init__(use_cache)
         self.key_col = key_col
         self.item_col = item_col
         self.n = n
         self.out_keys = [key_col, item_col]
+        self.name = self.name + "_" + str(self.n)
 
     def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
-        #from: https://www.kaggle.com/code/zerebom/article-id-pairs-in-3s-using-cudf/edit
-        pair_df = cudf.read_csv("/home/kokoro/h_and_m/higu/input/pair_df.csv")[["article_id", "pair"]]
+        # from: https://www.kaggle.com/code/zerebom/article-id-pairs-in-3s-using-cudf/edit
+        pair_df = cudf.read_csv("/home/kokoro/h_and_m/higu/input/pair_df.csv")[
+            ["article_id", "pair"]
+        ]
 
         self.out_cdf = to_cdf(
             trans_cdf.to_pandas()
