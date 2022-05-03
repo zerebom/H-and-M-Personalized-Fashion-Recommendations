@@ -65,10 +65,10 @@ class EmbBlock(AbstractBaseBlock):
     def __init__(self, key_col, emb_dic, prefix, use_cache):
         super().__init__(use_cache)
         # prefixで中身も変わるので、ファイル名も変える
+        self.prefix = prefix
         self.name = self.name + "_" + self.prefix
         self.key_col = key_col
         self.emb_dic = emb_dic
-        self.prefix = prefix
 
     def transform(
         self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week
