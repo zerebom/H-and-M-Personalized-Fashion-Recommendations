@@ -74,8 +74,8 @@ if True:
 root_dir = Path("/home/ec2-user/kaggle/h_and_m")
 input_dir = root_dir / "data"
 #exp_name = Path(os.path.basename(__file__)).stem
-exp_name = "exp16"
-exp_disc = "mana特徴を追加"
+exp_name = "exp17"
+exp_disc = "emb特徴を追加"
 output_dir = root_dir / "output"
 log_dir = output_dir / "log" / exp_name
 
@@ -100,15 +100,15 @@ to_cdf = cudf.DataFrame.from_pandas
 # %%
 
 raw_trans_cdf, raw_cust_cdf, raw_art_cdf = read_cdf(input_dir, DRY_RUN)
-# with open(str(input_dir / "emb/article_desc_bert.json")) as f:
-#     article_desc_bert_dic = json.load(f, object_hook=jsonKeys2int)
+with open(str(input_dir / "inputs/text_embedding/article_desc_bert.json")) as f:
+    article_desc_bert_dic = json.load(f, object_hook=jsonKeys2int)
 
 
 # with open(str(input_dir / "emb/svd.json")) as f:
 #     article_svd_dic = json.load(f, object_hook=jsonKeys2int)
 
-# with open(str(input_dir / "emb/resnet-18_umap_10.json")) as f:
-#     resnet18_umap_10_dic = json.load(f, object_hook=jsonKeys2int)
+with open(str(input_dir / "inputs/image_embedding/resnet-18_umap_10.json")) as f:
+    resnet18_umap_10_dic = json.load(f, object_hook=jsonKeys2int)
 
 
 #%%
@@ -153,12 +153,12 @@ agg_list_for_sales = ["max", "sum", "min"]
 
 article_feature_blocks = [
     *[SexArticleBlock("article_id", USE_CACHE)],
-    # *[
-    #     EmbBlock("article_id", article_desc_bert_dic, "bert"),
-    # ],
-    # *[
-    #     EmbBlock("article_id", resnet18_umap_10_dic, "res18"),
-    # ],
+    *[
+        EmbBlock("article_id", article_desc_bert_dic, "bert", USE_CACHE),
+    ],
+    *[
+        EmbBlock("article_id", resnet18_umap_10_dic, "res18", USE_CACHE),
+    ],
 
     *[RepeatSalesCustomerNum5Block("article_id", USE_CACHE)],
     *[ArticleBiasIndicatorBlock("article_id", USE_CACHE)],
@@ -199,6 +199,9 @@ static_feature_test_blocks = [
         TargetEncodingBlock("article_id", ["customer_id", "article_id"], col, agg_list, USE_CACHE)
         for col in ["price", "sales_channel_id"]
     ],
+    *[RepeatCustomerBlock("customer_id", USE_CACHE)],
+    *[MostFreqBuyDayofWeekBlock("customer_id", USE_CACHE)],
+    *[CustomerBuyIntervalBlock("customer_id", agg_list, USE_CACHE)],
 ]
 
 transaction_feature_test_blocks = [
@@ -427,7 +430,7 @@ del art_df_w_feat
 
 
 target_weeks = [104, 103, 102, 101, 100]  # test_yから何週間離れているか
-# target_weeks = [104, 103]  # test_yから何週間離れているか
+#target_weeks = [104, 103]  # test_yから何週間離れているか
 
 #%%
 if DRY_RUN:
@@ -541,13 +544,16 @@ mapk_val, valid_true = calc_map12(valid_df, logger, input_dir / "valid_true_afte
 fig, ax = visualize_importance([clf], train_X)
 fig.savefig(log_dir / "feature_importance.png")
 
-lgbm_path = output_dir / "lgbm.txt"
+lgbm_path = log_dir / "lgbm.txt"
 clf.booster_.save_model(lgbm_path)
 
 with open(lgbm_path, "wb") as f:
     pickle.dump(clf, f)
 
 plt.show()
+lgbm_path = log_dir / "lgbm.txt"
+with open(lgbm_path, "rb") as f:
+    clf = pickle.load(f)
 
 
 # %%
