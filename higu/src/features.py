@@ -2,8 +2,8 @@ import os
 import numpy as np
 import pickle
 from collections import defaultdict
-import torch
-import torch.nn as nn
+#import torch
+#import torch.nn as nn
 import cudf
 from tqdm import tqdm
 from pathlib import Path
@@ -11,6 +11,7 @@ import pandas as pd
 import numpy as np
 from lifetimes.utils import summary_data_from_transaction_data
 from datetime import date
+import datetime
 
 
 
@@ -21,7 +22,7 @@ class AbstractBaseBlock:
     def __init__(self, use_cache):
         self.use_cache = use_cache
         self.name = self.__class__.__name__
-        self.cache_dir = Path("/home/kokoro/h_and_m/higu/input/features")
+        self.cache_dir = Path("/home/ec2-user/kaggle/h_and_m/data/features")
 
     def fit(
         self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week
@@ -203,7 +204,7 @@ class SexArticleBlock(AbstractBaseBlock):
 
         cols = ["article_id", "index_name", "index_group_name", "section_name"]
         art_cdf = cudf.read_csv(
-            "/home/kokoro/h_and_m/higu/input/articles.csv", header=0, usecols=cols
+            '/home/ec2-user/kaggle/h_and_m/data/articles.csv', header=0, usecols=cols
         )
         women_regexp = "women|girl|ladies"
         men_regexp = "boy|men"  # womenが含まれてしまうのであとで処理する
@@ -378,10 +379,12 @@ class Dis2HistoryAveVecAndArtVec(AbstractBaseBlock):
 class RepeatSalesCustomerNum5Block(AbstractBaseBlock):
     # 一旦2-5を出そう
     # TODO: ハードコーディング部分を直す？考える
-    def __init__(self, key_col):
+    def __init__(self, key_col, use_cache):
+        super().__init__(use_cache)
+        self.use_cache = use_cache
         self.key_col = key_col
 
-    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
+    def transform(self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week):
         repeat_num_df = self.repeat_num(trans_cdf)
 
         out_cdf = art_cdf[["article_id"]].copy()     # 最初に紐づける先を用意する
@@ -412,10 +415,11 @@ class ArticleBiasIndicatorBlock(AbstractBaseBlock):
     例：超奇抜なピンクの服 -> ある一部の人から購入されている
     例：万人に購入されている -> 黒い下着
     """
-    def __init__(self, key_col):
+    def __init__(self, key_col, use_cache):
+        super().__init__(use_cache)
         self.key_col = key_col
 
-    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
+    def transform(self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week):
         bias_cdf = trans_cdf.groupby("article_id")["customer_id"].agg(["nunique","count"]).reset_index()
         bias_cdf.columns =["article_id", "nunique_customers", "sales"]
 
@@ -428,7 +432,7 @@ class FirstBuyDateBlock(AbstractBaseBlock):
         self.key_col = key_col
         self.end_date = end_date
 
-    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
+    def transform(self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week):
         end_date_datetime = datetime.strptime(self.end_date, '%Y-%m-%d')
 
         # 初日を出す
@@ -442,12 +446,14 @@ class FirstBuyDateBlock(AbstractBaseBlock):
 
 
 class SalesPerTimesForArticleBlock(AbstractBaseBlock):
-    def __init__(self, key_col, groupby_cols_dict, agg_list):
+    def __init__(self, key_col, groupby_cols_dict, agg_list, use_cache):
+        super().__init__(use_cache)
+        self.use_cache = use_cache
         self.key_col = key_col
         self.groupby_cols_dict = groupby_cols_dict
         self.agg_list = agg_list
 
-    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
+    def transform(self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week):
         trans_cdf = self.preprocess(trans_cdf.copy()) # 直接変更しないようにする
 
         out_cdf = art_cdf[["article_id"]].copy()     # 最初に紐づける先を用意する
@@ -458,7 +464,8 @@ class SalesPerTimesForArticleBlock(AbstractBaseBlock):
 
     def preprocess(self, trans_cdf: cudf.DataFrame):
         # 色々な日時情報を持ってくる
-        trans_cdf["t_dat_datetime"] = pd.to_datetime(trans_cdf["t_dat"].to_array())
+        #trans_cdf["t_dat_datetime"] = pd.to_datetime(trans_cdf["t_dat"].to_array())
+        trans_cdf["t_dat_datetime"] = cudf.to_datetime(trans_cdf["t_dat"])
         trans_cdf["year"] = trans_cdf["t_dat_datetime"].dt.year
         trans_cdf["month"] = trans_cdf["t_dat_datetime"].dt.month
         trans_cdf["day"] = trans_cdf["t_dat_datetime"].dt.day
@@ -477,11 +484,12 @@ class SalesPerTimesForArticleBlock(AbstractBaseBlock):
 
 # ------ userに関する特徴量 --------
 class SalesPerDayCustomerBlock(AbstractBaseBlock):
-    def __init__(self, key_col, agg_list):
+    def __init__(self, key_col, agg_list, use_cache):
+        super().__init__(use_cache)
         self.key_col = key_col
         self.agg_list = agg_list
 
-    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
+    def transform(self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week):
         trans_sales_cdf = self.sales_day(trans_cdf)
         out_cdf = trans_sales_cdf.groupby("customer_id")["all_sales_per_day"].agg(self.agg_list).reset_index()
         out_cdf.columns = ["customer_id"] + [f"sales_in_day_{col}" for col in out_cdf.columns[1:]] # 1列目はcustomer_id
@@ -498,10 +506,11 @@ class SalesPerDayCustomerBlock(AbstractBaseBlock):
 
 
 class RepeatCustomerBlock(AbstractBaseBlock):
-    def __init__(self, key_col):
+    def __init__(self, key_col, use_cache):
+        super().__init__(use_cache)
         self.key_col = key_col
 
-    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
+    def transform(self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week):
         trans_cdf = trans_cdf.copy()
         t_dat_df = self.preprocess(trans_cdf)
 
@@ -512,7 +521,8 @@ class RepeatCustomerBlock(AbstractBaseBlock):
         return repeat_customer_cdf
 
     def preprocess(self, trans_cdf):
-        trans_cdf["t_dat_datetime"] = pd.to_datetime(trans_cdf["t_dat"].to_array())
+        #trans_cdf["t_dat_datetime"] = pd.to_datetime(trans_cdf["t_dat"].to_array())
+        trans_cdf["t_dat_datetime"] = cudf.to_datetime(trans_cdf["t_dat"])
         # customerがある商品をどれくらいの頻度で買うか, 当日の場合はリピ買いと判定しない
         t_dat_cdf = trans_cdf.sort_values(['customer_id','article_id','t_dat_datetime']).drop_duplicates(subset=['customer_id','article_id','t_dat_datetime'],keep='first')[['customer_id','article_id','t_dat_datetime']].reset_index()
         t_dat_df = t_dat_cdf.to_pandas()
@@ -522,36 +532,16 @@ class RepeatCustomerBlock(AbstractBaseBlock):
         return t_dat_df
 
 
-class LifetimesBlock(AbstractBaseBlock):
-    def __init__(self, key_col):
-        self.key_col = key_col  # 'customer_id'
-
-    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
-        price_mean_cust_dat = (
-            trans_cdf.groupby(["customer_id", "t_dat"])["price"]
-            .sum()
-            .reset_index()
-            .to_pandas()
-        )
-        out_df = summary_data_from_transaction_data(
-            price_mean_cust_dat,
-            "customer_id",
-            "t_dat",
-            observation_period_end=price_mean_cust_dat.t_dat.max(),  # train:2020-09-08, valid: 2020-09-15 , test: 2020-09-22
-        ).reset_index()
-
-        out_cdf = cudf.from_pandas(out_df)
-
-        return out_cdf
-
 
 class MostFreqBuyDayofWeekBlock(AbstractBaseBlock):
-    def __init__(self, key_col):
+    def __init__(self, key_col, use_cache):
+        super().__init__(use_cache)
         self.key_col = key_col
 
-    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
+    def transform(self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week):
         trans_cdf = trans_cdf.copy() # 直接変更しないようにする
-        trans_cdf["t_dat_datetime"] = pd.to_datetime(trans_cdf["t_dat"].to_array())
+        #trans_cdf["t_dat_datetime"] = pd.to_datetime(trans_cdf["t_dat"].to_array())
+        trans_cdf["t_dat_datetime"] = cudf.to_datetime(trans_cdf["t_dat"])
         trans_cdf["dayofweek"] = trans_cdf["t_dat_datetime"].dt.dayofweek # 月曜日が0, 日曜日が6 ref: https://pandas.pydata.org/docs/reference/api/pandas.Series.dt.dayofweek.html
 
         sales_by_dayofweek = trans_cdf.groupby(["customer_id", "dayofweek"]).size().reset_index()
@@ -564,13 +554,15 @@ class MostFreqBuyDayofWeekBlock(AbstractBaseBlock):
         return out_cdf
 
 class CustomerBuyIntervalBlock(AbstractBaseBlock):
-    def __init__(self, key_col, agg_list):
+    def __init__(self, key_col, agg_list, use_cache):
+        super().__init__(use_cache)
         self.key_col = key_col
         self.agg_list = agg_list
 
-    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
+    def transform(self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week):
         trans_cdf = trans_cdf.copy() # 直接変更しないようにする
-        trans_cdf["t_dat_datetime"] = pd.to_datetime(trans_cdf["t_dat"].to_array())
+        #trans_cdf["t_dat_datetime"] = pd.to_datetime(trans_cdf["t_dat"].to_array())
+        trans_cdf["t_dat_datetime"] = cudf.to_datetime(trans_cdf["t_dat"])
         t_dat_df = self.make_day_diff(trans_cdf)
 
         # ここで連続するかどうか
@@ -604,13 +596,14 @@ class CustomerBuyIntervalBlock(AbstractBaseBlock):
 
 # ------ postal codeに関する特徴量 --------
 class PostalCodeBlock(AbstractBaseBlock):
-    def __init__(self, key_col, agg_cust_cols, agg_trans_cols, agg_list):
+    def __init__(self, key_col, agg_cust_cols, agg_trans_cols, agg_list, use_cache):
+        super().__init__(use_cache)
         self.key_col = key_col
         self.agg_cust_cols = agg_cust_cols
         self.agg_trans_cols = agg_trans_cols
         self.agg_list = agg_list
 
-    def transform(self, trans_cdf, art_cdf, cust_cdf, y_cdf, target_customers, logger):
+    def transform(self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week):
         # 準備としてtransにpostal codeをjoinさせる
         trans_postal_cdf = trans_cdf.merge(cust_cdf[["customer_id","postal_code"]], on="customer_id", how="left")
 
