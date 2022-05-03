@@ -23,12 +23,15 @@ from tqdm import tqdm
 
 if True:
     sys.path.append("../")
-    sys.path.append("/home/kokoro/h_and_m/higu/src")
+    #sys.path.append("/home/kokoro/h_and_m/higu/src")
+    sys.path.append("/home/ec2-user/kaggle/h_and_m/higu/src")
     from candidacies_dfs import (
         LastBoughtNArticles,
         PopularItemsoftheLastWeeks,
         LastNWeekArticles,
         PairsWithLastBoughtNArticles,
+        MensPopularItemsoftheLastWeeks,
+        EachSexPopularItemsoftheLastWeeks
     )
     from eda_tools import visualize_importance
     from features import (
@@ -38,7 +41,7 @@ if True:
         LifetimesBlock,
         SexArticleBlock,
         SexCustomerBlock,
-        Dis2HistoryAveVecAndArtVec,
+        #Dis2HistoryAveVecAndArtVec,
     )
     from metrics import mapk, calc_map12
     import config
@@ -59,11 +62,13 @@ if True:
     )
 
 
-root_dir = Path("/home/kokoro/h_and_m/higu")
-input_dir = root_dir / "input"
-exp_name = Path(os.path.basename(__file__)).stem
-output_dir = root_dir / "output" / exp_name
-log_dir = output_dir / "log"
+root_dir = Path("/home/ec2-user/kaggle/h_and_m")
+input_dir = root_dir / "data"
+#exp_name = Path(os.path.basename(__file__)).stem
+exp_name = "exp15"
+exp_disc = "性別ごとにtopN商品を推薦する候補生成を追加"
+output_dir = root_dir / "output"
+log_dir = output_dir / "log" / exp_name
 
 output_dir.mkdir(parents=True, exist_ok=True)
 log_dir.mkdir(parents=True, exist_ok=True)
@@ -71,7 +76,7 @@ log_dir.mkdir(parents=True, exist_ok=True)
 log_file = log_dir / f"{date.today()}.log"
 logger = setup_logger(log_file)
 DRY_RUN = False
-USE_CACHE = not DRY_RUN
+#USE_CACHE = not DRY_RUN
 USE_CACHE = True
 
 
@@ -86,12 +91,12 @@ to_cdf = cudf.DataFrame.from_pandas
 # %%
 
 raw_trans_cdf, raw_cust_cdf, raw_art_cdf = read_cdf(input_dir, DRY_RUN)
-with open(str(input_dir / "emb/article_desc_bert.json")) as f:
-    article_desc_bert_dic = json.load(f, object_hook=jsonKeys2int)
+# with open(str(input_dir / "emb/article_desc_bert.json")) as f:
+#     article_desc_bert_dic = json.load(f, object_hook=jsonKeys2int)
 
 
-with open(str(input_dir / "emb/svd.json")) as f:
-    article_svd_dic = json.load(f, object_hook=jsonKeys2int)
+# with open(str(input_dir / "emb/svd.json")) as f:
+#     article_svd_dic = json.load(f, object_hook=jsonKeys2int)
 
 # with open(str(input_dir / "emb/resnet-18_umap_10.json")) as f:
 #     resnet18_umap_10_dic = json.load(f, object_hook=jsonKeys2int)
@@ -101,17 +106,19 @@ with open(str(input_dir / "emb/svd.json")) as f:
 
 candidate_blocks = [
     *[PairsWithLastBoughtNArticles(n=30, use_cache=USE_CACHE)],
-    *[PopularItemsoftheLastWeeks(n=30, use_cache=USE_CACHE)],
+    #*[PopularItemsoftheLastWeeks(n=30, use_cache=USE_CACHE)],
     *[LastBoughtNArticles(n=30, use_cache=USE_CACHE)],
     *[LastNWeekArticles(n_weeks=2, use_cache=USE_CACHE)],
+    *[EachSexPopularItemsoftheLastWeeks(n=30, use_cache=USE_CACHE)],
 ]
 
 # inferenceはバッチで回すのでcacheは使わない
 candidate_blocks_test = [
     *[PairsWithLastBoughtNArticles(n=30, use_cache=False)],
-    *[PopularItemsoftheLastWeeks(n=30, use_cache=False)],
+    #*[PopularItemsoftheLastWeeks(n=30, use_cache=False)],
     *[LastBoughtNArticles(n=30, use_cache=False)],
     *[LastNWeekArticles(n_weeks=2, use_cache=False)],
+    *[EachSexPopularItemsoftheLastWeeks(n=30, use_cache=False)],
 ]
 
 
@@ -400,7 +407,6 @@ del art_df_w_feat
 
 target_weeks = [104, 103, 102, 101, 100]  # test_yから何週間離れているか
 # target_weeks = [104, 103]  # test_yから何週間離れているか
-DRY_RUN = False
 
 #%%
 if DRY_RUN:
@@ -524,11 +530,10 @@ plt.show()
 
 
 # %%
-DRY_RUN = False
 target_week = 105
 
 if DRY_RUN:
-    BATCH_USER_SIZE = 100_000
+    BATCH_USER_SIZE = 500_000
 else:
     BATCH_USER_SIZE = 200_000
 
