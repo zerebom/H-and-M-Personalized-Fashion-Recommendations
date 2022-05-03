@@ -31,7 +31,7 @@ if True:
         LastNWeekArticles,
         PairsWithLastBoughtNArticles,
         MensPopularItemsoftheLastWeeks,
-        EachSexPopularItemsoftheLastWeeks
+        EachSexPopularItemsoftheLastWeeks,
     )
     from eda_tools import visualize_importance
     from features import (
@@ -42,6 +42,15 @@ if True:
         SexArticleBlock,
         SexCustomerBlock,
         #Dis2HistoryAveVecAndArtVec,
+
+        RepeatCustomerBlock,
+        MostFreqBuyDayofWeekBlock,
+        CustomerBuyIntervalBlock,
+        RepeatSalesCustomerNum5Block,
+        ArticleBiasIndicatorBlock,
+        FirstBuyDateBlock,
+        SalesPerTimesForArticleBlock,
+
     )
     from metrics import mapk, calc_map12
     import config
@@ -65,8 +74,8 @@ if True:
 root_dir = Path("/home/ec2-user/kaggle/h_and_m")
 input_dir = root_dir / "data"
 #exp_name = Path(os.path.basename(__file__)).stem
-exp_name = "exp15"
-exp_disc = "性別ごとにtopN商品を推薦する候補生成を追加"
+exp_name = "exp16"
+exp_disc = "mana特徴を追加"
 output_dir = root_dir / "output"
 log_dir = output_dir / "log" / exp_name
 
@@ -106,19 +115,19 @@ raw_trans_cdf, raw_cust_cdf, raw_art_cdf = read_cdf(input_dir, DRY_RUN)
 
 candidate_blocks = [
     *[PairsWithLastBoughtNArticles(n=30, use_cache=USE_CACHE)],
-    #*[PopularItemsoftheLastWeeks(n=30, use_cache=USE_CACHE)],
+    *[PopularItemsoftheLastWeeks(n=30, use_cache=USE_CACHE)],
     *[LastBoughtNArticles(n=30, use_cache=USE_CACHE)],
     *[LastNWeekArticles(n_weeks=2, use_cache=USE_CACHE)],
-    *[EachSexPopularItemsoftheLastWeeks(n=30, use_cache=USE_CACHE)],
+    #*[EachSexPopularItemsoftheLastWeeks(n=30, use_cache=USE_CACHE)],
 ]
 
 # inferenceはバッチで回すのでcacheは使わない
 candidate_blocks_test = [
     *[PairsWithLastBoughtNArticles(n=30, use_cache=False)],
-    #*[PopularItemsoftheLastWeeks(n=30, use_cache=False)],
+    *[PopularItemsoftheLastWeeks(n=30, use_cache=False)],
     *[LastBoughtNArticles(n=30, use_cache=False)],
     *[LastNWeekArticles(n_weeks=2, use_cache=False)],
-    *[EachSexPopularItemsoftheLastWeeks(n=30, use_cache=False)],
+    #*[EachSexPopularItemsoftheLastWeeks(n=30, use_cache=False)],
 ]
 
 
@@ -138,6 +147,8 @@ candidate_blocks_test = [
 
 
 agg_list = ["mean", "max", "min", "std", "median"]
+groupby_cols_dict = {"year_month_day" : ["year","month","day"], "year_month":["year","month"], "day":["day"]}
+agg_list_for_sales = ["max", "sum", "min"]
 
 
 article_feature_blocks = [
@@ -148,6 +159,12 @@ article_feature_blocks = [
     # *[
     #     EmbBlock("article_id", resnet18_umap_10_dic, "res18"),
     # ],
+
+    *[RepeatSalesCustomerNum5Block("article_id", USE_CACHE)],
+    *[ArticleBiasIndicatorBlock("article_id", USE_CACHE)],
+    # *[FirstBuyDateBlock("article_id",  "2020-09-22"), USE_CACHE], # 日付はよしなに変えれた方がいいかも
+    *[SalesPerTimesForArticleBlock("article_id", groupby_cols_dict, agg_list_for_sales, USE_CACHE)]
+
 ]
 
 transaction_feature_blocks = [
@@ -163,6 +180,10 @@ transaction_feature_blocks = [
         TargetEncodingBlock("article_id", ["customer_id", "article_id"], col, agg_list, USE_CACHE)
         for col in ["price", "sales_channel_id"]
     ],
+
+    *[RepeatCustomerBlock("customer_id", USE_CACHE)],
+    *[MostFreqBuyDayofWeekBlock("customer_id", USE_CACHE)],
+    *[CustomerBuyIntervalBlock("customer_id", agg_list, USE_CACHE)],
 ]
 
 
