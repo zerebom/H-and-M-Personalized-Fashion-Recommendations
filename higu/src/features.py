@@ -12,6 +12,7 @@ import numpy as np
 from lifetimes.utils import summary_data_from_transaction_data
 from datetime import date
 import datetime
+import colorsys
 
 
 
@@ -654,3 +655,106 @@ class PostalCodeBlock(AbstractBaseBlock):
         most_popular_article_cdf = popular_article_cdf.sort_values("sales_in_postal_code",ascending=False).drop_duplicates(subset=["postal_code"])[["postal_code","article_id"]]
         most_popular_article_cdf.columns = ["postal_code","most_popular_article_in_postal"]
         return most_popular_article_cdf
+
+# -----------色に関係する特徴量 -------------
+class ColorArticleBlock(AbstractBaseBlock):
+    def __init__(self, key_col, use_cache):
+        super().__init__(use_cache)
+        self.key_col = key_col
+
+    def transform(self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week):
+        cols = ["article_id", "perceived_colour_value_name", "perceived_colour_master_name"]
+        art_cdf = cudf.read_csv(
+            '../input/h-and-m-personalized-fashion-recommendations/articles.csv', header=0, usecols=cols
+        )
+#         cudf.read_csv(
+#             '/home/ec2-user/kaggle/h_and_m/data/articles.csv', header=0, usecols=cols
+#         )
+        
+        # 辞書を作成(created by mana)
+        # 暗い方0、明るい方1 
+        perceived_dict = {'Dark':0, 'Light':1 , 'Dusty Light': 0.5, 'Bright':1 ,'Medium Dusty': 0.3,  'Medium':0.5, 'Undefined':None, 'Unknown':None}
+        # ref : https://note.cman.jp/color/base_color.cgi
+        # Khaki green, 'Metal', 'Mole', 'Lilac Purple', 'Yellowish Green', 'Bluish Green' はググった
+        # rgb
+        perceived_master_rgb_dict = \
+            {
+                'Black': [0,0,0], 'Blue':[0,0,255], 'White':[255,255,255],'Pink': [255,192,203], 'Grey': [128,128,128], 'Red':[255,0,0], 
+                'Beige':[245,245,220], 'Green':[0,128,0], 'Khaki green':[138, 134, 93], 'Yellow':[255,255,0], 'Orange':[255,165,0], 'Brown':[165,42,42],
+                'Metal':None, 'Turquoise':[64,224,208], 'Mole':None, 'Lilac Purple':[220, 208, 255], 'Unknown':None, 'undefined':None, 
+                'Yellowish Green':[154, 205, 50], 'Bluish Green':[13,152,186]
+            }
+        
+        # rgbを変換する
+        perceived_master_hls_dict = self.rgb2other_dict(perceived_master_rgb_dict, colorsys.rgb_to_hls)
+        perceived_master_yiq_dict = self.rgb2other_dict(perceived_master_rgb_dict, colorsys.rgb_to_yiq)
+        perceived_master_hsv_dict = self.rgb2other_dict(perceived_master_rgb_dict, colorsys.rgb_to_hsv)
+        
+        # 辞書作成
+        for color_type in ["rgb","hls","yiq","hsv"]:
+            exec(f"perceived_master_{color_type}_dict_0,perceived_master_{color_type}_dict_1, perceived_master_{color_type}_dict_2 = self.make_3_dict(perceived_master_{color_type}_dict)")
+            
+        # 列を変換
+        # 明るいと1になる
+        art_cdf["colour_light"] = art_cdf["perceived_colour_value_name"].map(perceived_dict)
+        # 新しい情報を追加する(リストは展開した状態で渡す)
+        for color_type in ["rgb","hls","yiq","hsv"]:
+            for dict_i in range(3):
+                exec(f'art_cdf["colour_master_{color_type}_{dict_i}"] = art_cdf["perceived_colour_master_name"].map(perceived_master_{color_type}_dict_{dict_i})')
+
+        # 使用する列を取得
+        aart_color_3dimension = [\
+            'colour_master_rgb_0', 'colour_master_rgb_1', 'colour_master_rgb_2',
+            'colour_master_hls_0', 'colour_master_hls_1', 'colour_master_hls_2',
+            'colour_master_yiq_0', 'colour_master_yiq_1', 'colour_master_yiq_2',
+            'colour_master_hsv_0',  'colour_master_hsv_1', 'colour_master_hsv_2']
+        art_color_cols = ['colour_light'] + art_color_3dimension
+        
+        out_cdf = art_cdf[["article_id"] + art_color_cols]
+        return out_cdf
+
+    def rgb2other_dict(self, use_dict, change_function):
+        return_dict = dict()
+        for k,v in use_dict.items():
+            if v is not None:
+                r, g, b = v
+                return_value = list(change_function(r / 255, g / 255, b /255))
+                return_dict[k] = return_value
+        return return_dict
+    
+    def make_3_dict(self, use_dict):
+        perceived_master_dict_list = []
+
+        for dict_i in range(3):
+            add_dict = {k:v[dict_i] for k,v in use_dict.items() if v is not None}
+            perceived_master_dict_list.append(add_dict)
+
+        return perceived_master_dict_list
+
+class ColorCustomerBlock(AbstractBaseBlock):
+    def __init__(self, key_col, agg_list, use_cache):
+        super().__init__(use_cache)
+        self.key_col = key_col
+        self.agg_list = agg_list
+
+    def transform(self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week):
+        # art_cdfを変換
+        color_article = ColorArticleBlock("article_id", self.use_cache)
+        art_cdf_color = color_article.transform(trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week)
+        
+        # 使用する列
+        art_color_3dimension = [\
+            'colour_master_rgb_0', 'colour_master_rgb_1', 'colour_master_rgb_2',
+            'colour_master_hls_0', 'colour_master_hls_1', 'colour_master_hls_2',
+            'colour_master_yiq_0', 'colour_master_yiq_1', 'colour_master_yiq_2',
+            'colour_master_hsv_0',  'colour_master_hsv_1', 'colour_master_hsv_2']
+        art_color_cols = ['colour_light'] + art_color_3dimension
+        
+        # ここからtransactionに紐付けて個人の情報量にする
+        trans_cdf_color = (
+            trans_cdf[["customer_id", "article_id"]]
+            .merge(art_cdf_color[["article_id"] + art_color_cols] , on="article_id", how="left")
+        )
+        out_cdf = trans_cdf_color.groupby("customer_id")[art_color_cols].agg(self.agg_list).reset_index()
+        out_cdf.columns = ["article_id"] + [f"{col_name}_{agg}" for col_name in art_color_cols for agg in self.agg_list]
+        return out_cdf
