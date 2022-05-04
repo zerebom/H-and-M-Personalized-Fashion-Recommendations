@@ -665,11 +665,11 @@ class ColorArticleBlock(AbstractBaseBlock):
     def transform(self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week):
         cols = ["article_id", "perceived_colour_value_name", "perceived_colour_master_name"]
         art_cdf = cudf.read_csv(
-            '../input/h-and-m-personalized-fashion-recommendations/articles.csv', header=0, usecols=cols
+            '/home/ec2-user/kaggle/h_and_m/data/articles.csv', header=0, usecols=cols
         )
-#         cudf.read_csv(
-#             '/home/ec2-user/kaggle/h_and_m/data/articles.csv', header=0, usecols=cols
-#         )
+        # cudf.read_csv(
+        #     '../input/h-and-m-personalized-fashion-recommendations/articles.csv', header=0, usecols=cols
+        # )
         
         # 辞書を作成(created by mana)
         # 暗い方0、明るい方1 
@@ -703,7 +703,7 @@ class ColorArticleBlock(AbstractBaseBlock):
                 exec(f'art_cdf["colour_master_{color_type}_{dict_i}"] = art_cdf["perceived_colour_master_name"].map(perceived_master_{color_type}_dict_{dict_i})')
 
         # 使用する列を取得
-        aart_color_3dimension = [\
+        art_color_3dimension = [\
             'colour_master_rgb_0', 'colour_master_rgb_1', 'colour_master_rgb_2',
             'colour_master_hls_0', 'colour_master_hls_1', 'colour_master_hls_2',
             'colour_master_yiq_0', 'colour_master_yiq_1', 'colour_master_yiq_2',
