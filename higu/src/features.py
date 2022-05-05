@@ -756,5 +756,5 @@ class ColorCustomerBlock(AbstractBaseBlock):
             .merge(art_cdf_color[["article_id"] + art_color_cols] , on="article_id", how="left")
         )
         out_cdf = trans_cdf_color.groupby("customer_id")[art_color_cols].agg(self.agg_list).reset_index()
-        out_cdf.columns = ["article_id"] + [f"{col_name}_{agg}" for col_name in art_color_cols for agg in self.agg_list]
+        out_cdf.columns = ["customer_id"] + [f"{col_name}_{agg}" for col_name in art_color_cols for agg in self.agg_list]
         return out_cdf
