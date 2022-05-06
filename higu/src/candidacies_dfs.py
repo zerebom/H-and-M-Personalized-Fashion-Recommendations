@@ -18,7 +18,8 @@ class AbstractCGBlock:
     def __init__(self, use_cache):
         self.use_cache = use_cache
         self.name = self.__class__.__name__
-        self.cache_dir = Path("/home/ec2-user/kaggle/h_and_m/data/candidates")
+        self.cache_dir = Path("/home/kokoro/h_and_m/higu/input/features")
+        # self.cache_dir = Path("/home/ec2-user/kaggle/h_and_m/data/candidates")
 
     def fit(
         self, trans_cdf, art_cdf, cust_cdf, logger, y_cdf, target_customers, target_week
@@ -167,6 +168,98 @@ class PopularItemsoftheLastWeeks(AbstractCGBlock):
         return self.out_cdf
 
 
+class PopularItemsoftheEachCluster(AbstractCGBlock):
+    """
+    各クラスターごとに人気アイテムN個を取得する
+    """
+
+    def __init__(self, n, key_col="customer_id", item_col="article_id", use_cache=True):
+        super().__init__(use_cache)
+        self.key_col = key_col
+        self.item_col = item_col
+        self.n = n
+        self.out_keys = [key_col, item_col]
+        self.name = self.name + "_" + str(self.n)
+
+    def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
+
+        input_dir = Path("/home/kokoro/h_and_m/higu/input")
+        cluster_cdf = cudf.read_csv(input_dir / "customer_kmeans_label.csv")
+        cols = ["customer_id", "article_id", "cluster"]
+
+        # 過去半年のtransactionだけ使う
+        trans_cdf = trans_cdf.query("week >= 80")
+
+        # 各クラスタごとに人気アイテムを取得([customer_id, article_id, cluster])
+        popluar_items_each_cluster_cdf = to_cdf(
+            trans_cdf.merge(cluster_cdf, how="left", on="customer_id")[cols]
+            .groupby(["article_id", "cluster"])
+            .size()
+            .to_frame(name="size")
+            .reset_index()
+            .to_pandas()
+            .sort_values(["size", "cluster"], ascending=False)
+            .groupby("cluster")
+            .head(self.n)
+            .reset_index(drop=True)
+        )
+
+        self.out_cdf = cluster_cdf.merge(popluar_items_each_cluster_cdf, how="left", on="cluster")[
+            self.out_keys
+        ]
+        print(self.out_cdf.shape)
+
+        del popluar_items_each_cluster_cdf
+
+        return self.out_cdf
+
+
+class PopularItemsoftheEachAge(AbstractCGBlock):
+    """
+    各年齢ごとに人気アイテムN個を取得する
+    """
+
+    def __init__(self, n, key_col="customer_id", item_col="article_id", use_cache=True):
+        super().__init__(use_cache)
+        self.key_col = key_col
+        self.item_col = item_col
+        self.n = n
+        self.out_keys = [key_col, item_col]
+        self.name = self.name + "_" + str(self.n)
+
+    def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
+
+       # 年のtransactionだけ使う
+        trans_cdf = trans_cdf.query("week >= 80")
+
+        age_bins = [0, 20, 30, 40, 50, 60, 100]
+        age_bins_name = ['0-20', '20-30', '30-40', '40-50', '50-60', '60-']
+        trans_cdf = trans_cdf.merge(cust_cdf, how="left", on="customer_id")
+        trans_cdf['bins'] = cudf.cut(trans_cdf['age'], bins=age_bins, labels=age_bins_name)
+
+age=_        # 各クラスタごとに人気アイテムを取得([customer_id, article_id, cluster])
+        pop年齢_items_each_cluster_cdf = to_cdf(
+
+        cols = ["customer_id", "article_id", "age_bins"]            trans_cdf.mergeage_binsf, how="left", on="customer_id")[cols]
+            trans_cdf[cols]            .size()
+binsage_bins            .to_frame(name="size")
+            .reset_index()
+            .to_pandas()
+            .sort_values(["size", "cluster"], ascending=False)
+            .groupby("cluster")
+binage_bins            .head(selfage_bins            .reset_index(drop=True)
+        )
+
+        self.out_cdf = cluster_cdf.merge(popluar_items_each_cluster_cdf, how="left", on="cluster")[
+            self.out_keys
+binsage_binspopluar_items_each_age_bins        ]
+        print(self.out_cdf.shape)
+
+        del popluar_items_each_cluster_cdf
+
+popluar_items_each_age_bins        return self.out_cdf
+
+
 class PairsWithLastBoughtNArticles(AbstractCGBlock):
     """
     各ユーザごとに直近の購入商品N個を取得する
@@ -182,7 +275,10 @@ class PairsWithLastBoughtNArticles(AbstractCGBlock):
 
     def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
         # from: https://www.kaggle.com/code/zerebom/article-id-pairs-in-3s-using-cudf/edit
-        pair_df = cudf.read_parquet("/home/ec2-user/kaggle/h_and_m/data/top1-article-pairs.parquet")[
+        # pair_df = cudf.read_parquet("/home/ec2-user/kaggle/h_and_m/data/top1-article-pairs.parquet")[
+        #     ["article_id", "pair"]
+        # ]
+        pair_df = cudf.read_csv("/home/kokoro/h_and_m/higu/input/pair_df.csv")[
             ["article_id", "pair"]
         ]
 
@@ -201,10 +297,11 @@ class PairsWithLastBoughtNArticles(AbstractCGBlock):
         )
         return self.out_cdf
 
+
 class MensPopularItemsoftheLastWeeks(AbstractCGBlock):
     """
     最終週の人気MensアイテムtopNを返す
-    
+
     最終的には男性に人気の商品を、女性には女性の人気商品を推薦したいが、
     購買履歴のない人(男女判定できない)には何を推薦すればいいか検討したいのでpending
     """
@@ -229,10 +326,8 @@ class MensPopularItemsoftheLastWeeks(AbstractCGBlock):
         return trans
 
     def calc_topn_article(self, input_cdf):
-        TopN_articles = list(
-            input_cdf["article_id"].value_counts().head(self.n).to_pandas().index
-        )
-        return  TopN_articles
+        TopN_articles = list(input_cdf["article_id"].value_counts().head(self.n).to_pandas().index)
+        return TopN_articles
 
     def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
         input_cdf = trans_cdf.copy()
@@ -240,11 +335,15 @@ class MensPopularItemsoftheLastWeeks(AbstractCGBlock):
         input_last_week_cdf = input_cdf.loc[input_cdf["week"] == last_week]
 
         cust_cdf_w_sex = self.make_customer_sex_info(art_cdf, trans_cdf)
-        input_last_week_cdf_w_sex = input_last_week_cdf.merge(cust_cdf_w_sex, on="customer_id", how="left")
+        input_last_week_cdf_w_sex = input_last_week_cdf.merge(
+            cust_cdf_w_sex, on="customer_id", how="left"
+        )
         assert len(input_last_week_cdf_w_sex) == len(input_last_week_cdf), "mergeうまくいってないです"
 
-        mens_input_last_week_cdf = input_last_week_cdf_w_sex[input_last_week_cdf_w_sex['men_percentage']>0.7]
-        mens_customers = mens_input_last_week_cdf['customer_id'].unique().to_pandas().values
+        mens_input_last_week_cdf = input_last_week_cdf_w_sex[
+            input_last_week_cdf_w_sex["men_percentage"] > 0.7
+        ]
+        mens_customers = mens_input_last_week_cdf["customer_id"].unique().to_pandas().values
         mens_TopN_articles = self.calc_topn_article(mens_input_last_week_cdf)
 
         if target_customers is None:
@@ -263,7 +362,7 @@ class MensPopularItemsoftheLastWeeks(AbstractCGBlock):
 class EachSexPopularItemsoftheLastWeeks(AbstractCGBlock):
     """
     性別ごとに最終週の人気アイテムtopNを返す
-    
+
     今の実装だと男性とも女性とも判定される人(['men_percentage']>0.7 かつ ['women_percentage']>0.7)に、男性のアイテムも女性のアイテムも候補生成していることになる？？？
     """
 
@@ -287,10 +386,8 @@ class EachSexPopularItemsoftheLastWeeks(AbstractCGBlock):
         return trans
 
     def calc_topn_article(self, input_cdf):
-        TopN_articles = list(
-            input_cdf["article_id"].value_counts().head(self.n).to_pandas().index
-        )
-        return  TopN_articles
+        TopN_articles = list(input_cdf["article_id"].value_counts().head(self.n).to_pandas().index)
+        return TopN_articles
 
     def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
         input_cdf = trans_cdf.copy()
@@ -298,15 +395,21 @@ class EachSexPopularItemsoftheLastWeeks(AbstractCGBlock):
         input_last_week_cdf = input_cdf.loc[input_cdf["week"] == last_week]
 
         cust_cdf_w_sex = self.make_customer_sex_info(art_cdf, trans_cdf)
-        input_last_week_cdf_w_sex = input_last_week_cdf.merge(cust_cdf_w_sex, on="customer_id", how="left")
+        input_last_week_cdf_w_sex = input_last_week_cdf.merge(
+            cust_cdf_w_sex, on="customer_id", how="left"
+        )
         assert len(input_last_week_cdf_w_sex) == len(input_last_week_cdf), "mergeうまくいってないです"
 
-        mens_input_last_week_cdf = input_last_week_cdf_w_sex[input_last_week_cdf_w_sex['men_percentage']>0.6]
-        mens_customers = mens_input_last_week_cdf['customer_id'].unique().to_pandas().values
+        mens_input_last_week_cdf = input_last_week_cdf_w_sex[
+            input_last_week_cdf_w_sex["men_percentage"] > 0.6
+        ]
+        mens_customers = mens_input_last_week_cdf["customer_id"].unique().to_pandas().values
         mens_TopN_articles = self.calc_topn_article(mens_input_last_week_cdf)
-        
-        womens_input_last_week_cdf = input_last_week_cdf_w_sex[input_last_week_cdf_w_sex['women_percentage']>0.6]
-        womens_customers = womens_input_last_week_cdf['customer_id'].unique().to_pandas().values
+
+        womens_input_last_week_cdf = input_last_week_cdf_w_sex[
+            input_last_week_cdf_w_sex["women_percentage"] > 0.6
+        ]
+        womens_customers = womens_input_last_week_cdf["customer_id"].unique().to_pandas().values
         womens_TopN_articles = self.calc_topn_article(womens_input_last_week_cdf)
 
         TopN_articles = list(
@@ -318,9 +421,11 @@ class EachSexPopularItemsoftheLastWeeks(AbstractCGBlock):
 
         # target_customersから男性、女性、判定不明を抽出
         # 性別が分かっているユーザー
-        sex_known_customers = set(mens_customers) | set(womens_customers) # mens_customers:487
+        sex_known_customers = set(mens_customers) | set(womens_customers)  # mens_customers:487
         sex_unknown_customers = set(target_customers) - set(sex_known_customers)
-        assert len(target_customers) == (len(mens_customers) + len(womens_customers) + len(sex_unknown_customers)), "集合の計算がおかしいよ!!!!!!"
+        assert len(target_customers) == (
+            len(mens_customers) + len(womens_customers) + len(sex_unknown_customers)
+        ), "集合の計算がおかしいよ!!!!!!"
 
         """
         print(len(mens_customers) , len(womens_customers) , len(sex_unknown_customers))
@@ -343,6 +448,8 @@ class EachSexPopularItemsoftheLastWeeks(AbstractCGBlock):
             columns=[self.key_col, self.item_col],
         )
 
-        self.out_cdf = cudf.concat([mens_out_cdf, womens_out_cdf, sex_unknown_out_cdf]).reset_index(drop=True)
-        assert len(target_customers)*self.n == len(self.out_cdf), "cudf.concatがおかしいよ!!!!!!"
+        self.out_cdf = cudf.concat(
+            [mens_out_cdf, womens_out_cdf, sex_unknown_out_cdf]
+        ).reset_index(drop=True)
+        assert len(target_customers) * self.n == len(self.out_cdf), "cudf.concatがおかしいよ!!!!!!"
         return self.out_cdf
