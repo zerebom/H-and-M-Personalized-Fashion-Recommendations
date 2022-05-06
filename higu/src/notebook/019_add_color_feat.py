@@ -1,5 +1,4 @@
 # %%
-
 from collections import defaultdict
 
 import matplotlib.pyplot as plt
@@ -30,7 +29,8 @@ if True:
         PairsWithLastBoughtNArticles,
         MensPopularItemsoftheLastWeeks,
         EachSexPopularItemsoftheLastWeeks,
-        PopularItemsoftheEachCluster
+        PopularItemsoftheEachCluster,
+        PopularItemsoftheEachAge
     )
     from eda_tools import visualize_importance
     from features import (
@@ -100,6 +100,7 @@ to_cdf = cudf.DataFrame.from_pandas
 %autoreload 2
 # %%
 
+
 raw_trans_cdf, raw_cust_cdf, raw_art_cdf = read_cdf(input_dir, DRY_RUN)
 with open(str(emb_dir/"article_desc_bert.json")) as f:
     article_desc_bert_dic = json.load(f, object_hook=jsonKeys2int)
@@ -115,10 +116,12 @@ with open(str(emb_dir/"resnet-18_umap_10.json")) as f:
 #%%
 
 
+USE_CACHE = True
 candidate_blocks = [
+    *[PopularItemsoftheEachAge(n=30, use_cache=USE_CACHE)],
     *[PopularItemsoftheEachCluster(n=30, use_cache=USE_CACHE)],
     *[PairsWithLastBoughtNArticles(n=30, use_cache=USE_CACHE)],
-    # *[PopularItemsoftheLastWeeks(n=30, use_cache=USE_CACHE)],
+    *[PopularItemsoftheLastWeeks(n=30, use_cache=USE_CACHE)],
     *[LastBoughtNArticles(n=30, use_cache=USE_CACHE)],
     *[LastNWeekArticles(n_weeks=2, use_cache=USE_CACHE)],
     #*[EachSexPopularItemsoftheLastWeeks(n=30, use_cache=USE_CACHE)],
@@ -126,12 +129,12 @@ candidate_blocks = [
 
 # inferenceはバッチで回すのでcacheは使わない
 candidate_blocks_test = [
-    *[PopularItemsoftheEachCluster(n=30, use_cache=USE_CACHE)],
+    *[PopularItemsoftheEachAge(n=30, use_cache=False)],
+    *[PopularItemsoftheEachCluster(n=30, use_cache=False)],
     *[PairsWithLastBoughtNArticles(n=30, use_cache=False)],
-    # *[PopularItemsoftheLastWeeks(n=30, use_cache=False)],
+    *[PopularItemsoftheLastWeeks(n=30, use_cache=False)],
     *[LastBoughtNArticles(n=30, use_cache=False)],
     *[LastNWeekArticles(n_weeks=2, use_cache=False)],
-
     #*[EachSexPopularItemsoftheLastWeeks(n=30, use_cache=False)],
 ]
 
@@ -400,6 +403,7 @@ def make_train_valid_df(
 #%%
 
 
+
 art_df_w_feat, _, _ = feature_generation(
     article_feature_blocks,
     raw_trans_cdf,
@@ -420,10 +424,8 @@ del art_df_w_feat
 
 #%%
 
-
-
 target_weeks = [104, 103, 102, 101, 100]  # test_yから何週間離れているか
-#target_weeks = [104, 103]  # test_yから何週間離れているか
+# target_weeks = [104, 103]  # test_yから何週間離れているか
 
 #%%
 if DRY_RUN:
@@ -465,7 +467,9 @@ else:
 
 drop_cols = ["customer_id", "article_id", "target_week", "y"]
 train_X = train_df.drop(drop_cols, axis=1)
+# valid_X = valid_df.drop(drop_cols, axis=1)
 valid_X = valid_df.drop(drop_cols, axis=1)
+
 
 
 #%%
@@ -526,16 +530,12 @@ clf, val_pred = train_rank_lgb(
     log_period=10,
 )
 
-
 #%%
 valid_df["prediction"] = val_pred
 mapk_val, valid_true = calc_map12(valid_df, logger, input_dir / "valid_true_after0916.csv")
 #%%
-_df = pd.DataFrame()
-_df['col'] = train_X.columns
-_df['fe'] = clf.feature_importances_
-_df = _df[_df['col'].str.contains('colour')]
-_df = _df.sort_values('fe', ascending=False)
+logger.info(f"valid_df['customer_id'].nunique():{valid_df['customer_id'].nunique()}")
+logger.info(f"valid_df.shape:{valid_df.shape}")
 
 
 
@@ -544,14 +544,14 @@ _df = _df.sort_values('fe', ascending=False)
 fig, ax = visualize_importance([clf], train_X)
 fig.savefig(log_dir / "feature_importance.png")
 
-lgbm_path = log_dir / "lgbm.txt"
+lgbm_path = log_dir / f"lgbm_{mapk_val}.txt"
 clf.booster_.save_model(lgbm_path)
 
 with open(lgbm_path, "wb") as f:
     pickle.dump(clf, f)
-
+#%%
 plt.show()
-lgbm_path = log_dir / "lgbm.txt"
+lgbm_path = log_dir / f"lgbm_0.02765.txt"
 with open(lgbm_path, "rb") as f:
     clf = pickle.load(f)
 
@@ -597,12 +597,12 @@ preds_list = []
 preds_dic = {}
 for bucket in tqdm(range(0, len(sub_customer_ids), BATCH_USER_SIZE)):
     batch_customer_ids = sub_customer_ids[bucket : bucket + BATCH_USER_SIZE]
-    batch_trans_cdf = raw_trans_cdf[raw_trans_cdf["customer_id"].isin(batch_customer_ids)]
+    # batch_trans_cdf = raw_trans_cdf[raw_trans_cdf["customer_id"].isin(batch_customer_ids)]
     # if len(batch_trans_cdf)>0:
 
     batch_base_df = candidate_generation(
         candidate_blocks_test,
-        batch_trans_cdf,
+        raw_trans_cdf,
         art_cdf_w_feat,
         raw_cust_cdf,
         y_cdf=None,
@@ -631,7 +631,7 @@ for bucket in tqdm(range(0, len(sub_customer_ids), BATCH_USER_SIZE)):
     batch_base_df = batch_base_df.drop_duplicates(
         subset=["article_id", "customer_id", "candidate_block_name"]
     ).reset_index(drop=True)
-
+    logger.info(f"batch_base_cdf.shape: {batch_base_df.shape}")
     # batch_base_df = reduce_mem_usage(batch_base_df)
     # 不要?
     drop_cols = ["customer_id", "article_id"]
@@ -667,6 +667,16 @@ for bucket in tqdm(range(0, len(sub_customer_ids), BATCH_USER_SIZE)):
     preds_list.append(batch_submission_df)
 #%%
 
+
+#batch_base_df.groupby('candidate_block_name').size()
+#%%
+tmp.groupby('age_bins')['article_id'].size()
+#%%
+tmp.groupby('age_bins')['customer_id'].nunique()
+
+
+
+#%%
 
 #%%
 preds_df = pd.concat(preds_list).reset_index()

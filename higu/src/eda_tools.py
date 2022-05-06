@@ -24,7 +24,7 @@ def visualize_importance(models, feat_train_df):
         feature_importance_df.groupby("column")
         .sum()[["feature_importance"]]
         .sort_values("feature_importance", ascending=False)
-        .index[:50]
+        .index[:200]
     )
 
     fig, ax = plt.subplots(figsize=(12, max(4, len(order) * 0.2)))
