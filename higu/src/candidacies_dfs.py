@@ -30,6 +30,9 @@ class AbstractCGBlock:
             with open(file_name, "rb") as f:
                 self.out_cdf = pickle.load(f)
         else:
+            if y_cdf is not None:
+                target_customers = y_cdf["customer_id"].unique().to_pandas().values
+                
             self.out_cdf = self.transform(trans_cdf, art_cdf, cust_cdf, target_customers)
             self.out_cdf["candidate_block_name"] = self.__class__.__name__
             self.out_cdf["candidate_block_name"] = self.out_cdf["candidate_block_name"].astype(
@@ -97,7 +100,7 @@ class LastNWeekArticles(AbstractCGBlock):
         self.name = self.name + "_" + str(self.n_weeks)
 
     def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
-        input_cdf = trans_cdf.copy()
+        input_cdf = trans_cdf[trans_cdf["customer_id"].isin(target_customers)]
 
         week_df = (
             input_cdf.groupby(self.key_col)["week"]
@@ -130,7 +133,9 @@ class LastBoughtNArticles(AbstractCGBlock):
         self.name = self.name + "_" + str(self.n)
 
     def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
-        input_df = trans_cdf[self.out_keys].to_pandas()
+        input_df = trans_cdf.loc[
+            trans_cdf["customer_id"].isin(target_customers), self.out_keys
+        ].to_pandas()
         self.out_cdf = to_cdf(input_df.groupby("customer_id").tail(self.n))
         return self.out_cdf
 
@@ -166,7 +171,177 @@ class PopularItemsoftheLastWeeks(AbstractCGBlock):
         )
         return self.out_cdf
 
+class PopularItemsoftheEachCluster(AbstractCGBlock):
+    """
+    各クラスターごとに人気アイテムN個を取得する
+    """
 
+    def __init__(self, n, key_col="customer_id", item_col="article_id", use_cache=True):
+        super().__init__(use_cache)
+        self.key_col = key_col
+        self.item_col = item_col
+        self.n = n
+        self.out_keys = [key_col, item_col]
+        self.name = self.name + "_" + str(self.n)
+
+    def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
+
+        input_dir = Path("/home/ec2-user/kaggle/h_and_m/output/log/exp18")
+        cluster_cdf = cudf.read_csv(input_dir / "customer_kmeans_label.csv")
+        cols = ["customer_id", "article_id", "cluster"]
+
+        # 過去半年のtransactionだけ使う
+        trans_cdf = trans_cdf.query("week >= 80")
+
+        # 各クラスタごとに人気アイテムを取得([customer_id, article_id, cluster])
+        popluar_items_each_cluster_cdf = to_cdf(
+            trans_cdf.merge(cluster_cdf, how="left", on="customer_id")[cols]
+            .groupby(["article_id", "cluster"])
+            .size()
+            .to_frame(name="size")
+            .reset_index()
+            .to_pandas()
+            .sort_values(["size", "cluster"], ascending=False)
+            .groupby("cluster")
+            .head(self.n)
+            .reset_index(drop=True)
+        )
+
+        cluster_cdf = cluster_cdf[cluster_cdf["customer_id"].isin(target_customers)]
+        self.out_cdf = cluster_cdf.merge(popluar_items_each_cluster_cdf, how="left", on="cluster")[
+            self.out_keys
+        ]
+        print(self.out_cdf.shape)
+
+        del popluar_items_each_cluster_cdf
+
+        return self.out_cdf
+
+# class PopularItemsoftheEachAge(AbstractCGBlock):
+#     """
+#     各年齢ごとに人気アイテムN個を取得する
+#     """
+
+#     def __init__(self, n, key_col="customer_id", item_col="article_id", use_cache=True):
+#         super().__init__(use_cache)
+#         self.key_col = key_col
+#         self.item_col = item_col
+#         self.n = n
+#         self.out_keys = [key_col, item_col]
+#         self.name = self.name + "_" + str(self.n)
+
+#     def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
+
+#         # EachClusterのcluster_cdfっぽいものを作りたい
+#         #target_cust_cdf = trans_cdf[trans_cdf["customer_id"].isin(target_customers)].reset_index(drop=True)
+#         # target_cust_cdf = trans_cdf.loc[trans_cdf["customer_id"].isin(target_customers), 'customer_id'].reset_index(drop=True)
+#         # target_cust_cdf = target_cust_cdf.drop_duplicates()
+#         target_cust_cdf = cudf.DataFrame()
+#         target_cust_cdf['customer_id'] = target_customers
+#         print(target_cust_cdf.shape)
+
+#          # 年のtransactionだけ使う
+#         trans_cdf = trans_cdf.query("week >= 80")
+
+#         age_bins = [-100, 0, 20, 30, 40, 50, 60, 100]
+#         age_bins_name = ["-1", "0-20", "20-30", "30-40", "40-50", "50-60", "60-"]
+#         trans_cdf = trans_cdf.merge(cust_cdf[["customer_id", "age"]], how="left", on="customer_id")
+#         # trans_cdf["bins"] = cudf.cut(trans_cdf["age"], bins=age_bins, labels=age_bins_name)
+#         # trans_cdf["age_bins"] = cudf.cut(trans_cdf["age"], bins=age_bins, labels=age_bins_name)
+
+#         trans_cdf["age_bins"] = pd.cut(trans_cdf["age"].to_pandas(), bins=age_bins, labels=age_bins_name).values
+
+#         # 各年齢ごとに人気アイテムを取得([customer_id, article_id, age_bins])
+#         cols = ["customer_id", "article_id", "age_bins"]
+#         popluar_items_each_age_bins = to_cdf(
+#             trans_cdf[cols]
+#             .groupby(["article_id", "age_bins"])
+#             .size()
+#             .to_frame(name="size")
+#             .reset_index()
+#             .to_pandas()
+#             .sort_values(["size", "age_bins"], ascending=False)
+#             .groupby("age_bins")
+#             .head(self.n)
+#             .reset_index(drop=True)
+#         )
+#         # TODO: trans_cdfにmergeすると、transactionがないユーザに候補生成を作れない
+#         del trans_cdf
+#         target_cust_cdf = target_cust_cdf.merge(cust_cdf[["customer_id", "age"]], how="left", on="customer_id")
+#         target_cust_cdf["age_bins"] = pd.cut(target_cust_cdf["age"].to_pandas(), bins=age_bins, labels=age_bins_name).values
+#         self.out_cdf = target_cust_cdf.merge(popluar_items_each_age_bins, how="left", on="age_bins")[
+#             self.out_keys
+#         ]
+
+#         # trans_cdf = trans_cdf.loc[trans_cdf["customer_id"].isin(target_customers), ['customer_id','age_bins']]
+#         # trans_cdf = trans_cdf.drop_duplicates(subset=['customer_id'])
+#         # self.out_cdf = trans_cdf.merge(popluar_items_each_age_bins, how="left", on="age_bins")[
+#         #     self.out_keys
+#         # ]
+#         print(self.out_cdf.shape)
+
+#         del popluar_items_each_age_bins
+
+#         return self.out_cdf
+
+class PopularItemsoftheEachAge(AbstractCGBlock):
+    """
+    各年齢ごとに人気アイテムN個を取得する
+    """
+
+    def __init__(self, n, key_col="customer_id", item_col="article_id", use_cache=True):
+        super().__init__(use_cache)
+        self.key_col = key_col
+        self.item_col = item_col
+        self.n = n
+        self.out_keys = [key_col, item_col]
+        self.name = self.name + "_" + str(self.n)
+
+    def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
+
+        # 年のtransactionだけ使う
+        trans_cdf = trans_cdf.query("week >= 80")
+
+        age_bins = [-100, 0, 20, 30, 40, 50, 60, 100]
+        age_bins_name = ["-1", "0-20", "20-30", "30-40", "40-50", "50-60", "60-"]
+        trans_cdf = trans_cdf.merge(cust_cdf[["customer_id", "age"]], how="left", on="customer_id")
+        # trans_cdf["bins"] = cudf.cut(trans_cdf["age"], bins=age_bins, labels=age_bins_name)
+        # trans_cdf["age_bins"] = cudf.cut(trans_cdf["age"], bins=age_bins, labels=age_bins_name)
+
+        trans_cdf["age_bins"] = pd.cut(trans_cdf["age"].to_pandas(), bins=age_bins, labels=age_bins_name).values
+
+        # 各年齢ごとに人気アイテムを取得([customer_id, article_id, age_bins])
+        cols = ["customer_id", "article_id", "age_bins"]
+        popluar_items_each_age_bins = to_cdf(
+            trans_cdf[cols]
+            .groupby(["article_id", "age_bins"])
+            .size()
+            .to_frame(name="size")
+            .reset_index()
+            .to_pandas()
+            .sort_values(["size", "age_bins"], ascending=False)
+            .groupby("age_bins")
+            .head(self.n)
+            .reset_index(drop=True)
+        )
+        # TODO: trans_cdfにmergeすると、transactionがないユーザに候補生成を作れない
+        # target_cust_cdf = raw_cust_cdf[raw_cust_cdf["customer_id"].isin(target_customers)]
+        # target_cust_cdf["age_bins"] = pd.cut(target_cust_cdf["age"].to_pandas(), bins=age_bins, labels=age_bins_name).values
+        # self.out_cdf = target_cust_cdf.merge(popluar_items_each_age_bins, how="left", on="age_bins")[
+        #     self.out_keys
+        # ]
+
+        trans_cdf = trans_cdf.loc[trans_cdf["customer_id"].isin(target_customers), ['customer_id','age_bins']]
+        trans_cdf = trans_cdf.drop_duplicates(subset=['customer_id'])
+        self.out_cdf = trans_cdf.merge(popluar_items_each_age_bins, how="left", on="age_bins")[
+            self.out_keys
+        ]
+        print(self.out_cdf.shape)
+
+        del popluar_items_each_age_bins
+
+        return self.out_cdf
+        
 class PairsWithLastBoughtNArticles(AbstractCGBlock):
     """
     各ユーザごとに直近の購入商品N個を取得する
@@ -182,9 +357,14 @@ class PairsWithLastBoughtNArticles(AbstractCGBlock):
 
     def transform(self, trans_cdf, art_cdf, cust_cdf, target_customers):
         # from: https://www.kaggle.com/code/zerebom/article-id-pairs-in-3s-using-cudf/edit
+        # pair_df = cudf.read_parquet("/home/ec2-user/kaggle/h_and_m/data/top1-article-pairs.parquet")[
+        #     ["article_id", "pair"]
+        # ]
         pair_df = cudf.read_parquet("/home/ec2-user/kaggle/h_and_m/data/top1-article-pairs.parquet")[
             ["article_id", "pair"]
         ]
+
+        trans_cdf = trans_cdf.loc[trans_cdf["customer_id"].isin(target_customers)]
 
         # ユーザーごとに最後に購入したN個の商品を抽出
         self.out_cdf = to_cdf(
