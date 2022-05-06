@@ -1,7 +1,4 @@
 # %%
-# %load_ext autoreload
-# %autoreload 2
-
 from collections import defaultdict
 
 import matplotlib.pyplot as plt
@@ -23,8 +20,8 @@ from tqdm import tqdm
 
 if True:
     sys.path.append("../")
-    #sys.path.append("/home/kokoro/h_and_m/higu/src")
-    sys.path.append("/home/ec2-user/kaggle/h_and_m/higu/src")
+    sys.path.append("/home/kokoro/h_and_m/higu/src")
+    # sys.path.append("/home/ec2-user/kaggle/h_and_m/higu/src")
     from candidacies_dfs import (
         LastBoughtNArticles,
         PopularItemsoftheLastWeeks,
@@ -32,6 +29,8 @@ if True:
         PairsWithLastBoughtNArticles,
         MensPopularItemsoftheLastWeeks,
         EachSexPopularItemsoftheLastWeeks,
+        PopularItemsoftheEachCluster,
+        PopularItemsoftheEachAge
     )
     from eda_tools import visualize_importance
     from features import (
@@ -42,7 +41,7 @@ if True:
         SexArticleBlock,
         SexCustomerBlock,
         #Dis2HistoryAveVecAndArtVec,
-
+        ColorArticleBlock,
         RepeatCustomerBlock,
         MostFreqBuyDayofWeekBlock,
         CustomerBuyIntervalBlock,
@@ -50,6 +49,7 @@ if True:
         ArticleBiasIndicatorBlock,
         FirstBuyDateBlock,
         SalesPerTimesForArticleBlock,
+        ColorCustomerBlock
 
     )
     from metrics import mapk, calc_map12
@@ -70,14 +70,13 @@ if True:
         timer,
     )
 
-
-root_dir = Path("/home/ec2-user/kaggle/h_and_m")
-input_dir = root_dir / "data"
-#exp_name = Path(os.path.basename(__file__)).stem
-exp_name = "exp17"
-exp_disc = "emb特徴を追加"
-output_dir = root_dir / "output"
-log_dir = output_dir / "log" / exp_name
+root_dir = Path("/home/kokoro/h_and_m/higu")
+input_dir = root_dir / "input"
+# input_dir = root_dir / "data"
+exp_name = Path(os.path.basename(__file__)).stem
+output_dir = root_dir / "output" / exp_name
+log_dir = output_dir / "log"
+emb_dir = input_dir /"emb"
 
 output_dir.mkdir(parents=True, exist_ok=True)
 log_dir.mkdir(parents=True, exist_ok=True)
@@ -96,24 +95,31 @@ CustIds = List[CustId]
 
 to_cdf = cudf.DataFrame.from_pandas
 
-
+#%%
+%load_ext autoreload
+%autoreload 2
 # %%
 
+
 raw_trans_cdf, raw_cust_cdf, raw_art_cdf = read_cdf(input_dir, DRY_RUN)
-with open(str(input_dir / "inputs/text_embedding/article_desc_bert.json")) as f:
+with open(str(emb_dir/"article_desc_bert.json")) as f:
     article_desc_bert_dic = json.load(f, object_hook=jsonKeys2int)
 
 
 # with open(str(input_dir / "emb/svd.json")) as f:
 #     article_svd_dic = json.load(f, object_hook=jsonKeys2int)
 
-with open(str(input_dir / "inputs/image_embedding/resnet-18_umap_10.json")) as f:
+with open(str(emb_dir/"resnet-18_umap_10.json")) as f:
     resnet18_umap_10_dic = json.load(f, object_hook=jsonKeys2int)
 
 
 #%%
 
+
+USE_CACHE = True
 candidate_blocks = [
+    *[PopularItemsoftheEachAge(n=30, use_cache=USE_CACHE)],
+    *[PopularItemsoftheEachCluster(n=30, use_cache=USE_CACHE)],
     *[PairsWithLastBoughtNArticles(n=30, use_cache=USE_CACHE)],
     *[PopularItemsoftheLastWeeks(n=30, use_cache=USE_CACHE)],
     *[LastBoughtNArticles(n=30, use_cache=USE_CACHE)],
@@ -123,6 +129,8 @@ candidate_blocks = [
 
 # inferenceはバッチで回すのでcacheは使わない
 candidate_blocks_test = [
+    *[PopularItemsoftheEachAge(n=30, use_cache=False)],
+    *[PopularItemsoftheEachCluster(n=30, use_cache=False)],
     *[PairsWithLastBoughtNArticles(n=30, use_cache=False)],
     *[PopularItemsoftheLastWeeks(n=30, use_cache=False)],
     *[LastBoughtNArticles(n=30, use_cache=False)],
@@ -131,39 +139,25 @@ candidate_blocks_test = [
 ]
 
 
-# candidate_blocks = [
-#     *[PairsWithLastBoughtNArticles(n=60, use_cache=USE_CACHE)],
-#     *[PopularItemsoftheLastWeeks(n=60, use_cache=USE_CACHE)],
-#     *[LastBoughtNArticles(n=60, use_cache=USE_CACHE)],
-#     *[LastNWeekArticles(n_weeks=4, use_cache=USE_CACHE)],
-# ]
-
-# candidate_blocks_test = [
-#     *[PairsWithLastBoughtNArticles(n=60, use_cache=USE_CACHE)],
-#     *[PopularItemsoftheLastWeeks(n=60, use_cache=USE_CACHE)],
-#     *[LastBoughtNArticles(n=60, use_cache=USE_CACHE)],
-#     *[LastNWeekArticles(n_weeks=4, use_cache=USE_CACHE)],
-# ]
-
-
 agg_list = ["mean", "max", "min", "std", "median"]
 groupby_cols_dict = {"year_month_day" : ["year","month","day"], "year_month":["year","month"], "day":["day"]}
 agg_list_for_sales = ["max", "sum", "min"]
-
+agg_list_for_color = ["mean", "std"]
 
 article_feature_blocks = [
     *[SexArticleBlock("article_id", USE_CACHE)],
-    *[
-        EmbBlock("article_id", article_desc_bert_dic, "bert", USE_CACHE),
-    ],
-    *[
-        EmbBlock("article_id", resnet18_umap_10_dic, "res18", USE_CACHE),
-    ],
+    # *[
+    #     EmbBlock("article_id", article_desc_bert_dic, "bert", USE_CACHE),
+    # ],
+    # *[
+    #     EmbBlock("article_id", resnet18_umap_10_dic, "res18", USE_CACHE),
+    # ],
 
-    *[RepeatSalesCustomerNum5Block("article_id", USE_CACHE)],
+    # *[RepeatSalesCustomerNum5Block("article_id", USE_CACHE)],
     *[ArticleBiasIndicatorBlock("article_id", USE_CACHE)],
     # *[FirstBuyDateBlock("article_id",  "2020-09-22"), USE_CACHE], # 日付はよしなに変えれた方がいいかも
-    *[SalesPerTimesForArticleBlock("article_id", groupby_cols_dict, agg_list_for_sales, USE_CACHE)]
+    *[SalesPerTimesForArticleBlock("article_id", groupby_cols_dict, agg_list, USE_CACHE)],
+    *[ColorArticleBlock("article_id", False)]
 
 ]
 
@@ -184,7 +178,7 @@ transaction_feature_blocks = [
     *[RepeatCustomerBlock("customer_id", USE_CACHE)],
     *[MostFreqBuyDayofWeekBlock("customer_id", USE_CACHE)],
     *[CustomerBuyIntervalBlock("customer_id", agg_list, USE_CACHE)],
-]
+    *[ColorCustomerBlock("customer_id", agg_list_for_color, False)]]
 
 
 static_feature_test_blocks = [
@@ -202,6 +196,7 @@ static_feature_test_blocks = [
     *[RepeatCustomerBlock("customer_id", USE_CACHE)],
     *[MostFreqBuyDayofWeekBlock("customer_id", USE_CACHE)],
     *[CustomerBuyIntervalBlock("customer_id", agg_list, USE_CACHE)],
+    *[ColorCustomerBlock("customer_id", agg_list_for_color, False)]
 ]
 
 transaction_feature_test_blocks = [
@@ -304,9 +299,9 @@ def feature_generation(
     return art_df, cust_df, pair_feat_df
 
 
+
+
 #%%
-
-
 def negative_sampling(base_df, logger, n):
     positive_df = base_df.query("y==1")
     positive_customer_ids = positive_df["customer_id"].unique()
@@ -408,6 +403,7 @@ def make_train_valid_df(
 #%%
 
 
+
 art_df_w_feat, _, _ = feature_generation(
     article_feature_blocks,
     raw_trans_cdf,
@@ -428,9 +424,8 @@ del art_df_w_feat
 
 #%%
 
-
 target_weeks = [104, 103, 102, 101, 100]  # test_yから何週間離れているか
-#target_weeks = [104, 103]  # test_yから何週間離れているか
+# target_weeks = [104, 103]  # test_yから何週間離れているか
 
 #%%
 if DRY_RUN:
@@ -460,7 +455,6 @@ else:
         candidate_blocks,
         transaction_feature_blocks,
     )
-#%%
 
 
 #%%
@@ -473,7 +467,9 @@ else:
 
 drop_cols = ["customer_id", "article_id", "target_week", "y"]
 train_X = train_df.drop(drop_cols, axis=1)
+# valid_X = valid_df.drop(drop_cols, axis=1)
 valid_X = valid_df.drop(drop_cols, axis=1)
+
 
 
 #%%
@@ -534,24 +530,28 @@ clf, val_pred = train_rank_lgb(
     log_period=10,
 )
 
-
 #%%
 valid_df["prediction"] = val_pred
 mapk_val, valid_true = calc_map12(valid_df, logger, input_dir / "valid_true_after0916.csv")
+#%%
+logger.info(f"valid_df['customer_id'].nunique():{valid_df['customer_id'].nunique()}")
+logger.info(f"valid_df.shape:{valid_df.shape}")
+
 
 
 #%%
+
 fig, ax = visualize_importance([clf], train_X)
 fig.savefig(log_dir / "feature_importance.png")
 
-lgbm_path = log_dir / "lgbm.txt"
+lgbm_path = log_dir / f"lgbm_{mapk_val}.txt"
 clf.booster_.save_model(lgbm_path)
 
 with open(lgbm_path, "wb") as f:
     pickle.dump(clf, f)
-
+#%%
 plt.show()
-lgbm_path = log_dir / "lgbm.txt"
+lgbm_path = log_dir / f"lgbm_0.02765.txt"
 with open(lgbm_path, "rb") as f:
     clf = pickle.load(f)
 
@@ -562,7 +562,7 @@ target_week = 105
 if DRY_RUN:
     BATCH_USER_SIZE = 500_000
 else:
-    BATCH_USER_SIZE = 200_000
+    BATCH_USER_SIZE = 100_000
 
 clipped_trans_cdf = raw_trans_cdf.query(f"week < @target_week")
 
@@ -572,8 +572,8 @@ submission_df["customer_id"] = customer_hex_id_to_int(submission_df["customer_id
 sub_customer_ids = submission_df["customer_id"].unique()
 
 
-#%%
 
+#%%
 # ここに特徴生成 バッチ推論ではclipped_trans_cdfが同様のため先に特徴は作る
 art_feat_df, cust_feat_df, _ = feature_generation(
     static_feature_test_blocks,
@@ -597,12 +597,12 @@ preds_list = []
 preds_dic = {}
 for bucket in tqdm(range(0, len(sub_customer_ids), BATCH_USER_SIZE)):
     batch_customer_ids = sub_customer_ids[bucket : bucket + BATCH_USER_SIZE]
-    batch_trans_cdf = raw_trans_cdf[raw_trans_cdf["customer_id"].isin(batch_customer_ids)]
+    # batch_trans_cdf = raw_trans_cdf[raw_trans_cdf["customer_id"].isin(batch_customer_ids)]
     # if len(batch_trans_cdf)>0:
 
     batch_base_df = candidate_generation(
         candidate_blocks_test,
-        batch_trans_cdf,
+        raw_trans_cdf,
         art_cdf_w_feat,
         raw_cust_cdf,
         y_cdf=None,
@@ -631,7 +631,7 @@ for bucket in tqdm(range(0, len(sub_customer_ids), BATCH_USER_SIZE)):
     batch_base_df = batch_base_df.drop_duplicates(
         subset=["article_id", "customer_id", "candidate_block_name"]
     ).reset_index(drop=True)
-
+    logger.info(f"batch_base_cdf.shape: {batch_base_df.shape}")
     # batch_base_df = reduce_mem_usage(batch_base_df)
     # 不要?
     drop_cols = ["customer_id", "article_id"]
@@ -666,6 +666,19 @@ for bucket in tqdm(range(0, len(sub_customer_ids), BATCH_USER_SIZE)):
 
     preds_list.append(batch_submission_df)
 #%%
+
+
+#batch_base_df.groupby('candidate_block_name').size()
+#%%
+tmp.groupby('age_bins')['article_id'].size()
+#%%
+tmp.groupby('age_bins')['customer_id'].nunique()
+
+
+
+#%%
+
+#%%
 preds_df = pd.concat(preds_list).reset_index()
 preds_df
 
@@ -681,3 +694,17 @@ submission_df.rename(columns={"article_id": "prediction"}, inplace=True)
 
 prefix = datetime.now().strftime(f"%m%d_%H%M")
 submission_df.to_csv(output_dir / f"submission_df_{prefix}.csv", index=False)
+
+# %%
+
+submission_df
+
+# %%
+
+output_dir
+
+# %%
+train_df.columns
+
+
+# %%
