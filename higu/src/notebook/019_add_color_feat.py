@@ -28,10 +28,10 @@ if True:
         PopularItemsoftheLastWeeks,
         LastNWeekArticles,
         PairsWithLastBoughtNArticles,
-        MensPopularItemsoftheLastWeeks,
         EachSexPopularItemsoftheLastWeeks,
         PopularItemsoftheEachCluster,
-        PopularItemsoftheEachAge
+        PopularItemsoftheEachAge,
+        RuleBase
     )
     from eda_tools import visualize_importance
     from features import (
@@ -74,8 +74,8 @@ if True:
 root_dir = Path("/home/ec2-user/kaggle/h_and_m")
 input_dir = root_dir / "data"
 #exp_name = Path(os.path.basename(__file__)).stem
-exp_name = "exp22"
-exp_disc = "特徴量の追加(bert, res18の集約特徴)"
+exp_name = "exp54"
+exp_disc = 'exp33, 王道特徴量の追加'
 output_dir = root_dir / "output"
 log_dir = output_dir / "log" / exp_name
 emb_dir = input_dir /"emb"
@@ -85,9 +85,10 @@ log_dir.mkdir(parents=True, exist_ok=True)
 
 log_file = log_dir / f"{date.today()}.log"
 logger = setup_logger(log_file)
+logger.info(f"実験{exp_name}: {exp_disc}")
 DRY_RUN = False
 #USE_CACHE = not DRY_RUN
-USE_CACHE = True
+USE_CACHE = False
 
 
 ArtId = int
@@ -100,6 +101,22 @@ to_cdf = cudf.DataFrame.from_pandas
 # %%
 
 raw_trans_cdf, raw_cust_cdf, raw_art_cdf = read_cdf(input_dir, DRY_RUN)
+
+# 性別特徴
+raw_art_cdf['index_group_name'] = cudf.read_csv('/home/ec2-user/kaggle/h_and_m/data/articles.csv')['index_group_name']
+raw_trans_cdf = cudf.merge(raw_trans_cdf, raw_art_cdf[['article_id', 'index_group_name']], on='article_id')
+mp = {'Ladieswear':1, 'Baby/Children':0.5, 'Menswear':0, 'Sport':0.5, 'Divided':0.5}
+raw_trans_cdf['gender'] = raw_trans_cdf['index_group_name'].map(mp)
+g = raw_trans_cdf.groupby('customer_id').gender.mean().reset_index()
+del raw_trans_cdf['gender'], raw_trans_cdf['index_group_name']
+raw_trans_cdf = cudf.merge(raw_trans_cdf, g, on='customer_id')
+
+# gender_df = raw_trans_cdf.drop_duplicates(subset=['customer_id'], keep='last')
+# gender_df['gender_label'] = 0
+# gender_df.loc[gender_df['gender']>0.6, 'gender_label'] = 2
+# gender_df.loc[(gender_df['gender']<=0.6) & (gender_df['gender']>=0.4), 'gender_label'] = 1
+# gender_df[["customer_id", "gender_label"]].to_csv('/home/ec2-user/kaggle/h_and_m/data/gender_df.csv', index=False)
+
 with open(str(input_dir / "inputs/text_embedding/article_desc_bert.json")) as f:
     article_desc_bert_dic = json.load(f, object_hook=jsonKeys2int)
 
@@ -121,9 +138,12 @@ candidate_blocks = [
     *[PopularItemsoftheLastWeeks(n=30, use_cache=USE_CACHE)],
     *[LastBoughtNArticles(n=30, use_cache=USE_CACHE)],
     *[LastNWeekArticles(n_weeks=2, use_cache=USE_CACHE)],
-    #*[EachSexPopularItemsoftheLastWeeks(n=30, use_cache=USE_CACHE)],
+    # *[EachSexPopularItemsoftheLastWeeks(n=30, use_cache=USE_CACHE)],
+    # *[RuleBase(use_cache=USE_CACHE)],
 ]
 
+cdf = cudf.read_csv('/home/ec2-user/kaggle/h_and_m/data/pred_target_week105.csv')
+cdf['article_id'] = cdf['article_id'].astype(int)
 # inferenceはバッチで回すのでcacheは使わない
 candidate_blocks_test = [
     *[PopularItemsoftheEachAge(n=30, use_cache=False)],
@@ -132,7 +152,8 @@ candidate_blocks_test = [
     *[PopularItemsoftheLastWeeks(n=30, use_cache=False)],
     *[LastBoughtNArticles(n=30, use_cache=False)],
     *[LastNWeekArticles(n_weeks=2, use_cache=False)],
-    #*[EachSexPopularItemsoftheLastWeeks(n=30, use_cache=False)],
+    # *[EachSexPopularItemsoftheLastWeeks(n=30, use_cache=False)],
+    # *[RuleBase(cdf = cdf, use_cache=False)],
 ]
 
 
@@ -140,6 +161,7 @@ agg_list = ["mean", "max", "min", "std", "median"]
 groupby_cols_dict = {"year_month_day" : ["year","month","day"], "year_month":["year","month"], "day":["day"]}
 agg_list_for_sales = ["max", "sum", "min"]
 agg_list_for_color = ["mean", "std"]
+agg_list_mean_std = ["mean", "std"]
 
 article_feature_blocks = [
     *[SexArticleBlock("article_id", USE_CACHE)],
@@ -150,10 +172,8 @@ article_feature_blocks = [
     #     EmbBlock("article_id", resnet18_umap_10_dic, "res18", USE_CACHE),
     # ],
 
-    # *[RepeatSalesCustomerNum5Block("article_id", USE_CACHE)],
-    *[ArticleBiasIndicatorBlock("article_id", USE_CACHE)],
+    *[RepeatSalesCustomerNum5Block("article_id", USE_CACHE)],
     *[FirstBuyDateBlock("article_id",  "2020-09-22", USE_CACHE)], # 日付はよしなに変えれた方がいいかも
-    *[SalesPerTimesForArticleBlock("article_id", groupby_cols_dict, agg_list, USE_CACHE)],
     *[ColorArticleBlock("article_id", USE_CACHE)]
 
 ]
@@ -171,16 +191,25 @@ transaction_feature_blocks = [
         TargetEncodingBlock("article_id", ["customer_id", "article_id"], col, agg_list, USE_CACHE)
         for col in ["price", "sales_channel_id"]
     ],
+    *[
+        TargetEncodingBlock("customer_id", ["customer_id", "article_id"], col, agg_list, USE_CACHE)
+        for col in ["price", "sales_channel_id"]
+    ],
 
     *[RepeatCustomerBlock("customer_id", USE_CACHE)],
     *[MostFreqBuyDayofWeekBlock("customer_id", USE_CACHE)],
     *[CustomerBuyIntervalBlock("customer_id", agg_list, USE_CACHE)],
     *[ColorCustomerBlock("customer_id", agg_list_for_color, USE_CACHE)],
-    *[TargetEncodingBlock("customer_id", "article_id", "days_from_first_purchased", agg_list, USE_CACHE)],
     *[
         TargetEncodingBlock("customer_id", "article_id", col, agg_list, USE_CACHE)
+        for col in ["days_from_first_purchased"] # , "men_flg", "women_flg", "nunique_customers", "sales_by_buy_users"
+    ],
+    *[
+        TargetEncodingBlock("customer_id", "article_id", col, agg_list_mean_std, USE_CACHE)
         for col in [f"bert_{i}_emb" for i in range(10)]
     ],
+    *[ArticleBiasIndicatorBlock("article_id", False)],
+    *[SalesPerTimesForArticleBlock("article_id", groupby_cols_dict, agg_list, False)],
     # *[
     #     TargetEncodingBlock("customer_id", "article_id", col, agg_list, USE_CACHE)
     #     for col in [f"res18_{i}_emb" for i in range(10)]
@@ -189,12 +218,12 @@ transaction_feature_blocks = [
     # *[
     #     ModeCategoryBlock("customer_id", col, use_cache=USE_CACHE)
     #     for col in [
-    #         "product_type_no",
+    #         # "product_type_no",
     #         "graphical_appearance_no",
     #         "colour_group_code",
     #         "perceived_colour_value_id",
     #         "perceived_colour_master_id",
-    #         "department_no",
+    #         # "department_no",
     #         "index_code",
     #         "index_group_no",
     #         "section_no",
@@ -217,15 +246,24 @@ static_feature_test_blocks = [
         TargetEncodingBlock("article_id", ["customer_id", "article_id"], col, agg_list, USE_CACHE)
         for col in ["price", "sales_channel_id"]
     ],
+    *[
+        TargetEncodingBlock("customer_id", ["customer_id", "article_id"], col, agg_list, USE_CACHE)
+        for col in ["price", "sales_channel_id"]
+    ],
     *[RepeatCustomerBlock("customer_id", USE_CACHE)],
     *[MostFreqBuyDayofWeekBlock("customer_id", USE_CACHE)],
     *[CustomerBuyIntervalBlock("customer_id", agg_list, USE_CACHE)],
     *[ColorCustomerBlock("customer_id", agg_list_for_color, USE_CACHE)],
-    *[TargetEncodingBlock("customer_id", "article_id", "days_from_first_purchased", agg_list, USE_CACHE)],
     *[
         TargetEncodingBlock("customer_id", "article_id", col, agg_list, USE_CACHE)
+        for col in ["days_from_first_purchased"] # , "men_flg", "women_flg", "nunique_customers", "sales_by_buy_users"
+    ],
+    *[
+        TargetEncodingBlock("customer_id", "article_id", col, agg_list_mean_std, USE_CACHE)
         for col in [f"bert_{i}_emb" for i in range(10)]
     ],
+    *[ArticleBiasIndicatorBlock("article_id", False)],
+    *[SalesPerTimesForArticleBlock("article_id", groupby_cols_dict, agg_list, False)],
     # *[
     #     TargetEncodingBlock("customer_id", "article_id", col, agg_list, USE_CACHE)
     #     for col in [f"res18_{i}_emb" for i in range(10)]
@@ -234,12 +272,12 @@ static_feature_test_blocks = [
     # *[
     #     ModeCategoryBlock("customer_id", col, use_cache=USE_CACHE)
     #     for col in [
-    #         "product_type_no",
+    #         # "product_type_no",
     #         "graphical_appearance_no",
     #         "colour_group_code",
     #         "perceived_colour_value_id",
     #         "perceived_colour_master_id",
-    #         "department_no",
+    #         # "department_no",
     #         "index_code",
     #         "index_group_no",
     #         "section_no",
@@ -468,10 +506,24 @@ art_df_w_feat, _, _ = feature_generation(
     target_week="None",
 )
 
-drop_article_columns = list(raw_art_cdf.columns)
-drop_article_columns.remove("article_id")
+def add_feature(df):
+    df['age-article_id_age_mean'] = df['age'] - df['article_id_age_mean']
+    df['age-article_id_age_median'] = df['age'] - df['article_id_age_median']
+    df['article_id_age_mean-article_id_age_median'] = df['article_id_age_mean'] - df['article_id_age_median']
+
+    df['diff_price'] = df['customer_id_price_mean'] - df['article_id_price_mean']
+
+    df['customer_price_x_age'] = df['customer_id_price_mean'] * df['age']
+    df['article_price_x_age'] = df['article_id_price_mean'] * df['age']
+    
+    # df['price-price_mean'] = df['price'] - df['price_mean']
+    # df['age_x_price'] = df['age'] * df['price']
+    return df
+
+# drop_article_columns = list(raw_art_cdf.columns)
+# drop_article_columns.remove("article_id")
+drop_article_columns = raw_art_cdf.to_pandas().filter(regex=".*_name").columns
 art_df_w_feat = art_df_w_feat.drop(drop_article_columns, axis=1)
-#print('🌟確認!!!!!!!!!!!!!!')
 
 art_cdf_w_feat = to_cdf(art_df_w_feat)
 del art_df_w_feat
@@ -480,133 +532,143 @@ del art_df_w_feat
 
 
 
-target_weeks = [104, 103, 102, 101, 100]  # test_yから何週間離れているか
-#target_weeks = [104, 103]  # test_yから何週間離れているか
+# target_weeks = [104, 103, 102, 101, 100]  # test_yから何週間離れているか
+# # target_weeks = [104, 103, 102]  # test_yから何週間離れているか
 
-#%%
-if DRY_RUN:
-    tmp = raw_trans_cdf.query(f"week in {target_weeks}").to_pandas()
-    sample_ids = (
-        (tmp.groupby(["customer_id"])["week"].nunique() == 2)
-        .to_frame()
-        .reset_index()
-        .query(f"week == True")["customer_id"]
-        .values[:10000]
-    )
-    trans_cdf = raw_trans_cdf[raw_trans_cdf["customer_id"].isin(list(sample_ids))]
-    train_df, valid_df, train_groups, valid_groups = make_train_valid_df(
-        trans_cdf,
-        art_cdf_w_feat,
-        raw_cust_cdf,
-        target_weeks,
-        candidate_blocks,
-        transaction_feature_blocks,
-    )
-else:
-    train_df, valid_df, train_groups, valid_groups = make_train_valid_df(
-        raw_trans_cdf,
-        art_cdf_w_feat,
-        raw_cust_cdf,
-        target_weeks,
-        candidate_blocks,
-        transaction_feature_blocks,
-    )
-
-
-#%%
-# train_df.to_csv(output_dir / "train_df3.csv", index=False)
-# valid_df.to_csv(output_dir / "valid_df.csv", index=False)
-# group_df = pd.DataFrame()
-
-# group_df["group"] = train_groups
-# group_df.to_csv(output_dir / "group_df2.csv", index=False)
-
-drop_cols = ["customer_id", "article_id", "target_week", "y"]
-train_X = train_df.drop(drop_cols, axis=1)
-valid_X = valid_df.drop(drop_cols, axis=1)
+# #%%
+# if DRY_RUN:
+#     tmp = raw_trans_cdf.query(f"week in {target_weeks}").to_pandas()
+#     sample_ids = (
+#         (tmp.groupby(["customer_id"])["week"].nunique() == 2)
+#         .to_frame()
+#         .reset_index()
+#         .query(f"week == True")["customer_id"]
+#         .values[:10000]
+#     )
+#     trans_cdf = raw_trans_cdf[raw_trans_cdf["customer_id"].isin(list(sample_ids))]
+#     train_df, valid_df, train_groups, valid_groups = make_train_valid_df(
+#         trans_cdf,
+#         art_cdf_w_feat,
+#         raw_cust_cdf,
+#         target_weeks,
+#         candidate_blocks,
+#         transaction_feature_blocks,
+#     )
+# else:
+#     train_df, valid_df, train_groups, valid_groups = make_train_valid_df(
+#         raw_trans_cdf,
+#         art_cdf_w_feat,
+#         raw_cust_cdf,
+#         target_weeks,
+#         candidate_blocks,
+#         transaction_feature_blocks,
+#     )
 
 
-#%%
+# #%%
+# # train_df.to_csv(output_dir / "train_df3.csv", index=False)
+# # valid_df.to_csv(output_dir / "valid_df.csv", index=False)
+# # group_df = pd.DataFrame()
+
+# # group_df["group"] = train_groups
+# # group_df.to_csv(output_dir / "group_df2.csv", index=False)
+
+# drop_cols = ["customer_id", "article_id", "target_week", "y"]
+# train_X = train_df.drop(drop_cols, axis=1)
+# valid_X = valid_df.drop(drop_cols, axis=1)
+
+# #train_df[["customer_id", "article_id", "target_week", "y", 'candidate_block_name']].head(500).to_csv(output_dir / f"train_df_head500.csv", index=False)
+
+# train_X = add_feature(train_X)
+# valid_X = add_feature(valid_X)
 
 
-RANK_PARAM = {
-    "objective": "lambdarank",
-    "metric": "map",
-    "eval_at": [12],
-    "verbosity": -1,
-    "boosting": "gbdt",
-    "is_unbalance": True,
-    "seed": 42,
-    "learning_rate": 0.05,
-    "colsample_bytree": 0.5,
-    "subsample_freq": 3,
-    "subsample": 0.9,
-    "n_estimators": 10000,
-    "importance_type": "gain",
-    "reg_lambda": 1.5,
-    "reg_alpha": 0.1,
-    "max_depth": 6,
-    "num_leaves": 45,
-}
+# #%%
 
 
-#%%
-def train_rank_lgb(
-    train_X, train_y, valid_X, valid_y, param, logger, early_stop_round, log_period
-):
-
-    lgb.register_logger(logger)
-    clf = lgb.LGBMRanker(**param)
-
-    clf.fit(
-        train_X,
-        train_y,
-        group=train_groups,
-        eval_group=[valid_groups],
-        eval_set=[(valid_X, valid_y)],
-        callbacks=[
-            lgb.early_stopping(stopping_rounds=early_stop_round),
-            lgb.log_evaluation(period=log_period),
-        ],
-    )
-    val_pred = clf.predict(valid_X)
-    return clf, val_pred
+# RANK_PARAM = {
+#     "objective": "lambdarank",
+#     "metric": "map",
+#     "eval_at": [12],
+#     "verbosity": -1,
+#     "boosting": "gbdt",
+#     "is_unbalance": True,
+#     "seed": 42,
+#     "learning_rate": 0.05,
+#     "colsample_bytree": 0.5,
+#     "subsample_freq": 3,
+#     "subsample": 0.9,
+#     "n_estimators": 10000,
+#     "importance_type": "gain",
+#     "reg_lambda": 1.5,
+#     "reg_alpha": 0.1,
+#     "max_depth": 6,
+#     "num_leaves": 45,
+# }
 
 
-clf, val_pred = train_rank_lgb(
-    train_X,
-    train_df["y"],
-    valid_X,
-    valid_df["y"],
-    RANK_PARAM,
-    logger,
-    early_stop_round=100,
-    log_period=10,
-)
+# #%%
+# def train_rank_lgb(
+#     train_X, train_y, valid_X, valid_y, param, logger, early_stop_round, log_period
+# ):
+
+#     lgb.register_logger(logger)
+#     clf = lgb.LGBMRanker(**param)
+
+#     clf.fit(
+#         train_X,
+#         train_y,
+#         group=train_groups,
+#         eval_group=[valid_groups],
+#         eval_set=[(valid_X, valid_y)],
+#         callbacks=[
+#             lgb.early_stopping(stopping_rounds=early_stop_round),
+#             lgb.log_evaluation(period=log_period),
+#         ],
+#     )
+#     val_pred = clf.predict(valid_X)
+#     return clf, val_pred
 
 
-#%%
-valid_df["prediction"] = val_pred
-mapk_val, valid_true = calc_map12(valid_df, logger, input_dir / "valid_true_after0916.csv")
-#%%
-_df = pd.DataFrame()
-_df['col'] = train_X.columns
-_df['fe'] = clf.feature_importances_
-_df = _df[_df['col'].str.contains('colour')]
-_df = _df.sort_values('fe', ascending=False)
+# clf, val_pred = train_rank_lgb(
+#     train_X,
+#     train_df["y"],
+#     valid_X,
+#     valid_df["y"],
+#     RANK_PARAM,
+#     logger,
+#     early_stop_round=100,
+#     log_period=10,
+# )
+
+
+# #%%
+# valid_df["prediction"] = val_pred
+
+# mapk_val, valid_true = calc_map12(valid_df, logger, input_dir / "valid_true_after0916.csv")
+
+# # cust_id = pd.read_csv(input_dir / "valid_true_after0916.csv")["customer_id"]
+# # valid_true["customer_id"] = cust_id
+# # valid_true[["customer_id", "prediction"]].to_csv(output_dir / f"valid_pred_lb_0.0244.csv", index=False)
+# #%%
+# _df = pd.DataFrame()
+# _df['col'] = train_X.columns
+# _df['fe'] = clf.feature_importances_
+# _df = _df[_df['col'].str.contains('colour')]
+# _df = _df.sort_values('fe', ascending=False)
 
 
 
-#%%
+# #%%
 
-fig, ax = visualize_importance([clf], train_X)
-fig.savefig(log_dir / "feature_importance.png")
+# fig, ax = visualize_importance([clf], train_X)
+# fig.savefig(log_dir / "feature_importance.png")
 
-lgbm_path = log_dir / "lgbm.txt"
-clf.booster_.save_model(lgbm_path)
+# lgbm_path = log_dir / "lgbm.txt"
+# clf.booster_.save_model(lgbm_path)
 
-with open(lgbm_path, "wb") as f:
-    pickle.dump(clf, f)
+# with open(lgbm_path, "wb") as f:
+#     pickle.dump(clf, f)
 
 # plt.show()
 lgbm_path = log_dir / "lgbm.txt"
@@ -620,7 +682,7 @@ target_week = 105
 if DRY_RUN:
     BATCH_USER_SIZE = 500_000
 else:
-    BATCH_USER_SIZE = 50_000
+    BATCH_USER_SIZE = 60_000
 
 clipped_trans_cdf = raw_trans_cdf.query(f"week < @target_week")
 
@@ -655,12 +717,12 @@ preds_list = []
 preds_dic = {}
 for bucket in tqdm(range(0, len(sub_customer_ids), BATCH_USER_SIZE)):
     batch_customer_ids = sub_customer_ids[bucket : bucket + BATCH_USER_SIZE]
-    batch_trans_cdf = raw_trans_cdf[raw_trans_cdf["customer_id"].isin(batch_customer_ids)]
+    #batch_trans_cdf = raw_trans_cdf[raw_trans_cdf["customer_id"].isin(batch_customer_ids)]
     # if len(batch_trans_cdf)>0:
 
     batch_base_df = candidate_generation(
         candidate_blocks_test,
-        batch_trans_cdf,
+        raw_trans_cdf,
         art_cdf_w_feat,
         raw_cust_cdf,
         y_cdf=None,
@@ -697,6 +759,7 @@ for bucket in tqdm(range(0, len(sub_customer_ids), BATCH_USER_SIZE)):
     batch_test_X = batch_base_df.drop(drop_cols, axis=1)
 
     batch_test_X["candidate_block_name"] = batch_test_X["candidate_block_name"].astype("category")
+    batch_test_X = add_feature(batch_test_X)
 
     # 推論
 
