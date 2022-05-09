@@ -104,7 +104,7 @@ class TargetEncodingBlock(AbstractBaseBlock):
             input_cdf = trans_cdf.copy()
 
         out_cdf = input_cdf.groupby(self.key_col)[self.target_col].agg(self.agg_list)
-        out_cdf.columns = ["_".join([self.target_col, col]) for col in out_cdf.columns]
+        out_cdf.columns = ["_".join([self.key_col, self.target_col, col]) for col in out_cdf.columns]
 
         out_cdf.reset_index(inplace=True)
 
@@ -152,6 +152,7 @@ class ModeCategoryBlock(AbstractBaseBlock):
         self, trans_cdf, art_cdf, cust_cdf, base_cdf, y_cdf, target_customers, logger, target_week
     ):
         col_name = "most_cat_" + self.target_col
+        trans_cdf = trans_cdf.merge(art_cdf[['article_id', self.target_col]], on='article_id', how="left")
         out_cdf = (
             trans_cdf.groupby([self.key_col, self.target_col])
             .size()
