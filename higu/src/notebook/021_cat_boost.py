@@ -482,7 +482,7 @@ RANK_PARAM = {
     "boosting": "gbdt",
     "is_unbalance": True,
     "seed": 42,
-    "learning_rate": 0.05,
+    "learning_rate": 0.2,
     "colsample_bytree": 0.5,
     "subsample_freq": 3,
     "subsample": 0.9,
